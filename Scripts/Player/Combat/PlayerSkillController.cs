@@ -414,39 +414,36 @@ public class PlayerSkillController : MonoBehaviour
         }
     }
     
-    private void UpdateSkillCooldowns()
+private void UpdateSkillCooldowns()
+{
+    if (!ValidateComponents()) return;
+    
+    var keys = new List<int>(skillCooldowns.Keys);
+    
+    foreach (int skillIndex in keys)
     {
-        if (!ValidateComponents()) return;
-        
-        var keys = new List<int>(skillCooldowns.Keys);
-        bool anyUpdated = false;
-        
-        foreach (int skillIndex in keys)
+        if (skillCooldowns[skillIndex] > 0)
         {
-            if (skillCooldowns[skillIndex] > 0)
+            float oldCooldown = skillCooldowns[skillIndex];
+            skillCooldowns[skillIndex] -= Time.deltaTime;
+            skillCooldowns[skillIndex] = Mathf.Max(0, skillCooldowns[skillIndex]);
+            
+            // Disparar evento de mudança de cooldown se houve mudança significativa
+            if (Mathf.Abs(oldCooldown - skillCooldowns[skillIndex]) > 0.01f)
             {
-                float oldCooldown = skillCooldowns[skillIndex];
-                skillCooldowns[skillIndex] -= Time.deltaTime;
-                skillCooldowns[skillIndex] = Mathf.Max(0, skillCooldowns[skillIndex]);
+                var stats = statsManager.Stats;
+                float totalCooldown = skillIndex < skills.Count ? 
+                    skills[skillIndex].GetActualCooldown(stats) : 1f;
                 
-                // Disparar evento de mudança de cooldown se houve mudança significativa
-                if (Mathf.Abs(oldCooldown - skillCooldowns[skillIndex]) > 0.01f)
+                EventManager.TriggerEvent(new SkillCooldownChangedEvent
                 {
-                    var stats = statsManager.Stats;
-                    float totalCooldown = skillIndex < skills.Count ? 
-                        skills[skillIndex].GetActualCooldown(stats) : 1f;
-                    
-                    EventManager.TriggerEvent(new SkillCooldownChangedEvent
-                    {
-                        skillIndex = skillIndex,
-                        remainingCooldown = skillCooldowns[skillIndex],
-                        totalCooldown = totalCooldown
-                    });
-                    
-                    anyUpdated = true;
-                }
+                    skillIndex = skillIndex,
+                    remainingCooldown = skillCooldowns[skillIndex],
+                    totalCooldown = totalCooldown
+                });
             }
         }
+    }
         
         // A UI será atualizada automaticamente via eventos
     }
