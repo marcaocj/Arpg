@@ -1,2 +1,2 @@
 # Arpg
-Meu jogo rpg 3d feito na unity inpirado no diablo 2 epath of exile 2
+Meu jogo rpg 3d feito na unity inpirado no diablo 3 e path of exile 2
