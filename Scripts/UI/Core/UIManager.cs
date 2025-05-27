@@ -5,7 +5,7 @@ using System.Collections;
 using System.Collections.Generic;
 
 /// <summary>
-/// UIManager OTIMIZADO - Performance melhorada com updates condicionais, pooling e lazy loading
+/// UIManager CORRIGIDO - Fix definitivo para o flash vermelho permanente da health bar
 /// </summary>
 public class UIManager : MonoBehaviour
 {
@@ -40,19 +40,20 @@ public class UIManager : MonoBehaviour
     public Transform notificationContainer;
     public float notificationDuration = 2f;
     
-    [Header("Performance Settings - NOVOS")]
-    [SerializeField] private float uiUpdateInterval = 0.1f;
-    [SerializeField] private float skillUpdateInterval = 0.2f;
-    [SerializeField] private float goldUpdateInterval = 0.5f;
-    [SerializeField] private int maxNotifications = 5;
-    [SerializeField] private int notificationPoolSize = 10;
-    [SerializeField] private bool enableLazyLoading = true;
-    [SerializeField] private bool enableSmartUpdates = true;
+    [Header("Performance Settings")]
+    public float uiUpdateInterval = 0.1f;
+    public int maxNotifications = 5;
     
     [Header("Animation Fix Settings")]
     public bool fixAnimationBugs = true;
     public float maxLevelUpAnimationScale = 1.2f;
     public float levelUpAnimationDuration = 0.8f;
+    
+    [Header("Health Bar Flash Settings")]
+    public Color healthBarNormalColor = Color.white;
+    public Color healthBarFlashColor = Color.red;
+    public float flashDuration = 0.3f;
+    public int flashCount = 2;
     
     // Cache para evitar FindObjectOfType - OTIMIZAÇÃO CRÍTICA
     private PlayerController cachedPlayer;
@@ -66,7 +67,7 @@ public class UIManager : MonoBehaviour
     private float cacheValidationTimer = 0f;
     private const float CACHE_VALIDATION_INTERVAL = 2f;
     
-    // NOVO: Cache melhorado para evitar updates desnecessários
+    // Cache para evitar updates desnecessários
     private int cachedHealth = -1;
     private int cachedMaxHealth = -1;
     private int cachedMana = -1;
@@ -75,18 +76,11 @@ public class UIManager : MonoBehaviour
     private int cachedLevel = -1;
     private int cachedGold = -1;
     
-    // NOVO: Hash para detectar mudanças reais
-//    private int lastHealthHash = 0;
-//    private int lastManaHash = 0;
-    private int lastSkillHash = 0;
+    // Timer para updates
+    private float updateTimer = 0f;
     
-    // NOVO: Update timers staggered
-    private float uiUpdateTimer = 0f;
-    private float skillUpdateTimer = 0f;
-    private float goldUpdateTimer = 0f;
-    
-    // NOVO: Notification Pool
-    private Queue<GameObject> notificationPool = new Queue<GameObject>();
+    // Notification management
+    private Queue<GameObject> notificationQueue = new Queue<GameObject>();
     private List<GameObject> activeNotifications = new List<GameObject>();
     
     // Tooltip management
@@ -105,76 +99,28 @@ public class UIManager : MonoBehaviour
     private Coroutine healthBarUpdateCoroutine;
     private Coroutine manaBarUpdateCoroutine;
     
-    // NOVO: Lazy Loading Components
-    private Dictionary<string, bool> componentLoadStatus = new Dictionary<string, bool>();
-    private Dictionary<string, Component> lazyComponents = new Dictionary<string, Component>();
-    
-    // NOVO: Performance Monitoring
-    private float frameTime = 0f;
-    private float avgFrameTime = 0f;
-    private int frameCount = 0;
-    
-    // NOVO: Smart Update Flags
-    private bool needsHealthUpdate = false;
-    private bool needsManaUpdate = false;
-    private bool needsSkillUpdate = false;
-    private bool needsGoldUpdate = false;
+    // FIX CRÍTICO: Controle do flash da health bar
+    private bool isHealthBarFlashing = false;
+    private Coroutine healthBarFlashCoroutine;
+    private Image healthBarFillImage;
+    private Color originalHealthBarColor;
+    private bool hasInitializedHealthBarColor = false;
     
     private void Start()
     {
         SubscribeToEvents();
         InitializeUI();
+        
+        // FIX: Salvar escala original do level text
         InitializeLevelTextScale();
-        InitializeNotificationPool();
-        InitializeLazyLoading();
         
+        // FIX CRÍTICO: Inicializar cor original da health bar
+        InitializeHealthBarColor();
+        
+        // Tentar cachear componentes
         TryCacheComponents();
+        
         Invoke("DelayedFirstUpdate", 0.2f);
-    }
-    
-    // NOVO: Inicialização do Pool de Notificações
-    private void InitializeNotificationPool()
-    {
-        if (notificationPrefab == null || notificationContainer == null) return;
-        
-        for (int i = 0; i < notificationPoolSize; i++)
-        {
-            GameObject notification = Instantiate(notificationPrefab, notificationContainer);
-            notification.SetActive(false);
-            notificationPool.Enqueue(notification);
-        }
-    }
-    
-    // NOVO: Sistema de Lazy Loading
-    private void InitializeLazyLoading()
-    {
-        if (!enableLazyLoading) return;
-        
-        // Marcar componentes para lazy loading
-        componentLoadStatus["InventoryUI"] = false;
-        componentLoadStatus["QuestUI"] = false;
-        componentLoadStatus["SkillTree"] = false;
-        componentLoadStatus["Settings"] = false;
-    }
-    
-    private T GetLazyComponent<T>(string key) where T : Component
-    {
-        if (!enableLazyLoading) return FindObjectOfType<T>();
-        
-        if (lazyComponents.ContainsKey(key))
-        {
-            return lazyComponents[key] as T;
-        }
-        
-        // Load on demand
-        T component = FindObjectOfType<T>();
-        if (component != null)
-        {
-            lazyComponents[key] = component;
-            componentLoadStatus[key] = true;
-        }
-        
-        return component;
     }
     
     private void InitializeLevelTextScale()
@@ -183,6 +129,35 @@ public class UIManager : MonoBehaviour
         {
             originalLevelTextScale = levelText.transform.localScale;
             hasInitializedLevelTextScale = true;
+            Debug.Log($"UIManager: Level text scale original salva: {originalLevelTextScale}");
+        }
+    }
+    
+    // FIX CRÍTICO: Inicializar cor original da health bar
+    private void InitializeHealthBarColor()
+    {
+        if (healthBar != null && !hasInitializedHealthBarColor)
+        {
+            healthBarFillImage = healthBar.fillRect.GetComponent<Image>();
+            if (healthBarFillImage != null)
+            {
+                // Salvar cor original ou usar a configurada no inspector
+                originalHealthBarColor = healthBarFillImage.color;
+                
+                // Se a cor atual for transparente ou estranha, usar a cor normal configurada
+                if (originalHealthBarColor.a < 0.5f || originalHealthBarColor == Color.clear)
+                {
+                    originalHealthBarColor = healthBarNormalColor;
+                    healthBarFillImage.color = originalHealthBarColor;
+                }
+                
+                hasInitializedHealthBarColor = true;
+                Debug.Log($"UIManager: Cor original da health bar salva: {originalHealthBarColor}");
+            }
+            else
+            {
+                Debug.LogWarning("UIManager: Image do fill da health bar não encontrada!");
+            }
         }
     }
     
@@ -222,23 +197,11 @@ public class UIManager : MonoBehaviour
         }
         
         // FIX: Inicializar barras com valores seguros
-        InitializeBars();
-        
-        // Inicializar collections
-        activeNotifications.Clear();
-    }
-    
-    private void InitializeBars()
-    {
         if (healthBar != null)
         {
             healthBar.minValue = 0;
             healthBar.maxValue = 100;
             healthBar.value = 100;
-            
-            // NOVO: Disable raycast em fill areas para performance
-            var fillImage = healthBar.fillRect?.GetComponent<Image>();
-            if (fillImage != null) fillImage.raycastTarget = false;
         }
         
         if (manaBar != null)
@@ -246,10 +209,6 @@ public class UIManager : MonoBehaviour
             manaBar.minValue = 0;
             manaBar.maxValue = 50;
             manaBar.value = 50;
-            
-            // NOVO: Disable raycast
-            var fillImage = manaBar.fillRect?.GetComponent<Image>();
-            if (fillImage != null) fillImage.raycastTarget = false;
         }
         
         if (experienceBar != null)
@@ -257,10 +216,14 @@ public class UIManager : MonoBehaviour
             experienceBar.minValue = 0;
             experienceBar.maxValue = 100;
             experienceBar.value = 0;
-            
-            // NOVO: Disable raycast
-            var fillImage = experienceBar.fillRect?.GetComponent<Image>();
-            if (fillImage != null) fillImage.raycastTarget = false;
+        }
+        
+        // Inicializar lists e queues
+        activeNotifications.Clear();
+        
+        while (notificationQueue.Count > 0)
+        {
+            notificationQueue.Dequeue();
         }
     }
     
@@ -273,6 +236,7 @@ public class UIManager : MonoBehaviour
             cachedPlayerStats = cachedPlayer.GetStats();
             cachedPlayerHealth = cachedPlayer.GetHealthManager();
             playerCacheValid = true;
+            Debug.Log("UIManager: Player cacheado com sucesso");
         }
         
         // Cache do GameManager
@@ -280,6 +244,7 @@ public class UIManager : MonoBehaviour
         {
             cachedGameManager = GameManager.instance;
             gameManagerCacheValid = true;
+            Debug.Log("UIManager: GameManager cacheado com sucesso");
         }
     }
     
@@ -288,51 +253,19 @@ public class UIManager : MonoBehaviour
         ForceUpdateAllUI();
     }
     
-    // NOVO: Update System Otimizado
     private void Update()
     {
-        // Performance monitoring
-        if (enableSmartUpdates)
+        updateTimer -= Time.deltaTime;
+        if (updateTimer <= 0f)
         {
-            MonitorPerformance();
-        }
-        
-        // Tentar cachear se ainda não temos
-        if (!playerCacheValid || !gameManagerCacheValid)
-        {
-            TryCacheComponents();
-        }
-        
-        // NOVO: Staggered Updates para melhor performance
-        UpdateTimers();
-        
-        // Critical updates (sempre executar)
-        if (needsHealthUpdate || needsManaUpdate)
-        {
-            UpdateCriticalUI();
-        }
-        
-        // Non-critical updates (com throttling)
-        if (uiUpdateTimer <= 0f && (needsSkillUpdate || needsGoldUpdate))
-        {
+            // Tentar cachear se ainda não temos
+            if (!playerCacheValid || !gameManagerCacheValid)
+            {
+                TryCacheComponents();
+            }
+            
             UpdateNonCriticalUI();
-            uiUpdateTimer = uiUpdateInterval;
-        }
-        
-        // Skill-specific updates (menos frequentes)
-        if (skillUpdateTimer <= 0f && needsSkillUpdate)
-        {
-            UpdateSkillIcons();
-            skillUpdateTimer = skillUpdateInterval;
-            needsSkillUpdate = false;
-        }
-        
-        // Gold updates (ainda menos frequentes)
-        if (goldUpdateTimer <= 0f && needsGoldUpdate)
-        {
-            UpdateGoldDisplay();
-            goldUpdateTimer = goldUpdateInterval;
-            needsGoldUpdate = false;
+            updateTimer = uiUpdateInterval;
         }
         
         // Validação periódica do cache
@@ -343,44 +276,10 @@ public class UIManager : MonoBehaviour
             cacheValidationTimer = CACHE_VALIDATION_INTERVAL;
         }
         
-        // Gerenciar notifications
-        ProcessNotificationQueue();
-    }
-    
-    // NOVO: Performance Monitoring
-    private void MonitorPerformance()
-    {
-        frameTime = Time.deltaTime;
-        frameCount++;
-        avgFrameTime = (avgFrameTime * (frameCount - 1) + frameTime) / frameCount;
-        
-        // Auto-adjust update intervals based on performance
-        if (avgFrameTime > 0.02f) // Se FPS < 50
+        // FIX: Verificação aprimorada de sincronização das barras
+        if (playerCacheValid && cachedPlayerHealth != null)
         {
-            uiUpdateInterval = Mathf.Min(uiUpdateInterval * 1.1f, 0.5f);
-            skillUpdateInterval = Mathf.Min(skillUpdateInterval * 1.1f, 1f);
-        }
-        else if (avgFrameTime < 0.01f) // Se FPS > 100
-        {
-            uiUpdateInterval = Mathf.Max(uiUpdateInterval * 0.9f, 0.05f);
-            skillUpdateInterval = Mathf.Max(skillUpdateInterval * 0.9f, 0.1f);
-        }
-    }
-    
-    private void UpdateTimers()
-    {
-        uiUpdateTimer -= Time.deltaTime;
-        skillUpdateTimer -= Time.deltaTime;
-        goldUpdateTimer -= Time.deltaTime;
-    }
-    
-    // NOVO: Updates Críticos (sempre executar)
-    private void UpdateCriticalUI()
-    {
-        if (!playerCacheValid || cachedPlayerHealth == null) return;
-        
-        if (needsHealthUpdate)
-        {
+            // Verificar health bar
             int currentHealth = cachedPlayerHealth.CurrentHealth;
             int currentMaxHealth = cachedPlayerHealth.MaxHealth;
             
@@ -388,11 +287,8 @@ public class UIManager : MonoBehaviour
             {
                 UpdateHealthBarSafely(currentHealth, currentMaxHealth);
             }
-            needsHealthUpdate = false;
-        }
-        
-        if (needsManaUpdate)
-        {
+            
+            // Verificar mana bar
             int currentMana = cachedPlayerHealth.CurrentMana;
             int currentMaxMana = cachedPlayerHealth.MaxMana;
             
@@ -400,128 +296,10 @@ public class UIManager : MonoBehaviour
             {
                 UpdateManaBarSafely(currentMana, currentMaxMana);
             }
-            needsManaUpdate = false;
-        }
-    }
-    
-    private void UpdateNonCriticalUI()
-    {
-        // Updates menos críticos
-        if (needsGoldUpdate && gameManagerCacheValid && cachedGameManager != null)
-        {
-            int currentGold = cachedGameManager.goldCollected;
-            if (currentGold != cachedGold && goldText != null)
-            {
-                // NOVO: Animate gold change
-                StartCoroutine(AnimateGoldChange(cachedGold, currentGold));
-                cachedGold = currentGold;
-            }
-        }
-    }
-    
-    // NOVO: Animação suave para mudança de ouro
-    private IEnumerator AnimateGoldChange(int fromValue, int toValue)
-    {
-        if (goldText == null) yield break;
-        
-        float duration = 0.3f;
-        float elapsed = 0f;
-        
-        while (elapsed < duration)
-        {
-            elapsed += Time.deltaTime;
-            float progress = elapsed / duration;
-            int currentValue = Mathf.RoundToInt(Mathf.Lerp(fromValue, toValue, progress));
-            goldText.text = currentValue.ToString();
-            yield return null;
         }
         
-        goldText.text = toValue.ToString();
-    }
-    
-    // NOVO: Hash-based change detection para skills
-    private void UpdateSkillIcons()
-    {
-        if (!playerCacheValid || cachedPlayer == null) return;
-        
-        var skillController = cachedPlayer.GetSkillController();
-        if (skillController == null) return;
-        
-        var skills = skillController.GetAllSkills();
-        if (skills == null) return;
-        
-        // NOVO: Calcular hash para detectar mudanças
-        int newSkillHash = CalculateSkillHash(skillController, skills);
-        
-        if (newSkillHash != lastSkillHash)
-        {
-            UpdateSkillIconsActual(skillController, skills);
-            lastSkillHash = newSkillHash;
-        }
-    }
-    
-    // NOVO: Função para calcular hash das skills
-    private int CalculateSkillHash(PlayerSkillController skillController, List<Skill> skills)
-    {
-        int hash = skillController.currentSkillIndex;
-        
-        for (int i = 0; i < skills.Count && i < (skillIcons?.Length ?? 0); i++)
-        {
-            if (skillController.IsSkillOnCooldown(i))
-            {
-                hash ^= (i + 1) * 31;
-            }
-        }
-        
-        return hash;
-    }
-    
-    private void UpdateSkillIconsActual(PlayerSkillController skillController, List<Skill> skills)
-    {
-        if (skillIcons == null) return;
-        
-        for (int i = 0; i < skillIcons.Length; i++)
-        {
-            if (skillIcons[i] != null)
-            {
-                if (i < skills.Count)
-                {
-                    skillIcons[i].gameObject.SetActive(true);
-                    skillIcons[i].color = GetSkillTypeColor(skills[i].type);
-                }
-                else
-                {
-                    skillIcons[i].gameObject.SetActive(false);
-                }
-            }
-            
-            // Update cooldown overlays
-            if (skillCooldowns != null && i < skillCooldowns.Length && skillCooldowns[i] != null)
-            {
-                UpdateSkillCooldown(i, skillController, skills);
-            }
-        }
-    }
-    
-    private void UpdateSkillCooldown(int index, PlayerSkillController skillController, List<Skill> skills)
-    {
-        if (index < skills.Count && skillController.IsSkillOnCooldown(index))
-        {
-            float remaining = skillController.GetSkillCooldownRemaining(index);
-            float total = skills[index].GetActualCooldown(cachedPlayerStats);
-            
-            skillCooldowns[index].gameObject.SetActive(true);
-            skillCooldowns[index].fillAmount = remaining / total;
-        }
-        else
-        {
-            skillCooldowns[index].gameObject.SetActive(false);
-        }
-    }
-    
-    private void UpdateGoldDisplay()
-    {
-        // Implementação simplificada - já tratada em UpdateNonCriticalUI
+        // Gerenciar notifications queue
+        ProcessNotificationQueue();
     }
     
     private void ValidateCache()
@@ -533,6 +311,7 @@ public class UIManager : MonoBehaviour
             cachedPlayer = null;
             cachedPlayerStats = null;
             cachedPlayerHealth = null;
+            Debug.LogWarning("UIManager: Cache do player invalidado - objeto destruído");
         }
         
         // Validar cache do GameManager
@@ -540,6 +319,7 @@ public class UIManager : MonoBehaviour
         {
             gameManagerCacheValid = false;
             cachedGameManager = null;
+            Debug.LogWarning("UIManager: Cache do GameManager invalidado - objeto destruído");
         }
     }
     
@@ -553,7 +333,11 @@ public class UIManager : MonoBehaviour
             cachedPlayerStats = cachedPlayer.GetStats();
             cachedPlayerHealth = cachedPlayer.GetHealthManager();
             playerCacheValid = true;
+            
+            // Resetar cache de UI para forçar atualização
             ResetUICache();
+            
+            Debug.Log("UIManager: Novo player cacheado");
         }
     }
     
@@ -563,11 +347,16 @@ public class UIManager : MonoBehaviour
         cachedPlayerStats = null;
         cachedPlayerHealth = null;
         playerCacheValid = false;
+        
+        // Resetar cache
         ResetUICache();
+        
+        Debug.Log("UIManager: Cache do player limpo");
     }
     
     private void OnSceneTransition(SceneTransitionEvent eventData)
     {
+        // FIX: Limpar animações ao trocar de cena
         StopAllAnimations();
         
         // Invalidar todos os caches ao trocar de cena
@@ -578,47 +367,45 @@ public class UIManager : MonoBehaviour
         playerCacheValid = false;
         gameManagerCacheValid = false;
         
+        // Resetar cache de UI
         ResetUICache();
+        
+        // Limpar notifications
         ClearAllNotifications();
         
-        // Reset lazy loading
-        componentLoadStatus.Clear();
-        lazyComponents.Clear();
+        Debug.Log("UIManager: Cache limpo devido à transição de cena");
     }
     
     private void OnPlayerHealthChanged(PlayerHealthChangedEvent eventData)
     {
-        // NOVO: Smart update flag
-        needsHealthUpdate = true;
+        UpdateHealthBarSafely(eventData.currentHealth, eventData.maxHealth);
         
-        // Animação visual para mudanças críticas de saúde
-        if (eventData.healthDelta < 0)
+        // FIX CRÍTICO: Animação visual para mudanças críticas de saúde
+        if (eventData.healthDelta < 0) // Tomou dano
         {
-            StartCoroutine(FlashHealthBar());
+            StartHealthBarFlashSafely();
         }
     }
     
     private void OnPlayerManaChanged(PlayerManaChangedEvent eventData)
     {
-        // NOVO: Smart update flag
-        needsManaUpdate = true;
+        UpdateManaBarSafely(eventData.currentMana, eventData.maxMana);
     }
     
     private void OnPlayerLevelUp(PlayerLevelUpEvent eventData)
     {
+        // FIX: Level text update with proper animation control
         UpdateLevelTextSafely(eventData.newLevel);
         
-        // Auto-update flags
-        needsHealthUpdate = true;
-        needsManaUpdate = true;
-        
-        ShowLevelUpEffects();
+        // Mostrar notificação de level up
+        ShowNotification($"LEVEL UP! Nível {eventData.newLevel}", NotificationType.LevelUp, 3f);
     }
     
     private void OnPlayerExperienceGained(PlayerExperienceGainedEvent eventData)
     {
         if (experienceBar != null)
         {
+            // FIX: Animação suave da barra de experiência com bounds checking
             StartCoroutine(AnimateExperienceBarSafely(eventData.currentExperience, eventData.experienceToNextLevel));
             cachedExperience = eventData.currentExperience;
         }
@@ -626,13 +413,21 @@ public class UIManager : MonoBehaviour
     
     private void OnPlayerStatsRecalculated(PlayerStatsRecalculatedEvent eventData)
     {
+        // FIX: Forçar atualização das barras quando stats são recalculados
         cachedMaxHealth = -1;
         cachedMaxMana = -1;
         
-        // Set update flags
-        needsHealthUpdate = true;
-        needsManaUpdate = true;
+        if (healthBar != null)
+        {
+            healthBar.maxValue = Mathf.Max(1, eventData.maxHealth);
+        }
         
+        if (manaBar != null)
+        {
+            manaBar.maxValue = Mathf.Max(1, eventData.maxMana);
+        }
+        
+        // Forçar atualização imediata
         Invoke("ForceUpdateBars", 0.1f);
     }
     
@@ -640,40 +435,30 @@ public class UIManager : MonoBehaviour
     {
         if (eventData.wasSuccessful)
         {
-            // NOVO: Lazy load inventory UI only when needed
-            if (inventoryPanel != null && inventoryPanel.activeSelf)
-            {
-                UpdateInventoryUI();
-            }
-            ShowNotificationFromPool($"Item adicionado: {eventData.item.name}", NotificationType.ItemCollected);
+            UpdateInventoryUI();
+            ShowNotification($"Item adicionado: {eventData.item.name}", NotificationType.ItemCollected);
         }
         else
         {
-            ShowNotificationFromPool(eventData.failureReason, NotificationType.Error);
+            ShowNotification(eventData.failureReason, NotificationType.Error);
         }
     }
     
     private void OnItemEquipped(ItemEquippedEvent eventData)
     {
-        if (inventoryPanel != null && inventoryPanel.activeSelf)
-        {
-            UpdateInventoryUI();
-        }
-        ShowNotificationFromPool($"Equipado: {eventData.item.name}", NotificationType.Success);
+        UpdateInventoryUI();
+        ShowNotification($"Equipado: {eventData.item.name}", NotificationType.Success);
     }
     
     private void OnItemUnequipped(ItemUnequippedEvent eventData)
     {
-        if (inventoryPanel != null && inventoryPanel.activeSelf)
-        {
-            UpdateInventoryUI();
-        }
-        ShowNotificationFromPool($"Desequipado: {eventData.item.name}", NotificationType.Info);
+        UpdateInventoryUI();
+        ShowNotification($"Desequipado: {eventData.item.name}", NotificationType.Info);
     }
     
     private void OnNotificationRequested(NotificationEvent eventData)
     {
-        ShowNotificationFromPool(eventData.message, eventData.type, eventData.duration, eventData.color);
+        ShowNotification(eventData.message, eventData.type, eventData.duration, eventData.color);
     }
     
     private void OnTooltipRequested(TooltipRequestEvent eventData)
@@ -690,19 +475,24 @@ public class UIManager : MonoBehaviour
     
     private void OnGoldCollected(GoldCollectedEvent eventData)
     {
-        // NOVO: Smart update flag
-        needsGoldUpdate = true;
+        if (goldText != null && eventData.totalGold != cachedGold)
+        {
+            // Animação do texto de ouro
+            StartCoroutine(AnimateGoldText(eventData.totalGold));
+            cachedGold = eventData.totalGold;
+        }
         
-        ShowNotificationFromPool($"+{eventData.amount} ouro", NotificationType.Success, 1.5f);
+        ShowNotification($"+{eventData.amount} ouro", NotificationType.Success, 1.5f);
     }
     
     private void OnInventoryFull(InventoryFullEvent eventData)
     {
-        ShowNotificationFromPool("Inventário cheio!", NotificationType.Warning);
+        ShowNotification("Inventário cheio!", NotificationType.Warning);
     }
     
     private void OnUIElementToggled(UIElementToggledEvent eventData)
     {
+        // Gerenciar diferentes elementos de UI
         switch (eventData.elementName)
         {
             case "Inventory":
@@ -724,6 +514,7 @@ public class UIManager : MonoBehaviour
                 break;
                 
             case "AllUI":
+                // Toggle geral da UI
                 ToggleAllUI(eventData.isVisible);
                 break;
         }
@@ -737,9 +528,11 @@ public class UIManager : MonoBehaviour
     {
         if (healthBar == null || isUpdatingHealthBar) return;
         
+        // Validar valores
         maxHealth = Mathf.Max(1, maxHealth);
         currentHealth = Mathf.Clamp(currentHealth, 0, maxHealth);
         
+        // Verificar mudanças
         bool hasChanged = (currentHealth != cachedHealth || maxHealth != cachedMaxHealth);
         
         if (hasChanged)
@@ -747,11 +540,13 @@ public class UIManager : MonoBehaviour
             cachedHealth = currentHealth;
             cachedMaxHealth = maxHealth;
             
+            // Parar coroutine anterior se existir
             if (healthBarUpdateCoroutine != null)
             {
                 StopCoroutine(healthBarUpdateCoroutine);
             }
             
+            // Iniciar nova atualização
             healthBarUpdateCoroutine = StartCoroutine(UpdateHealthBarCoroutine(currentHealth, maxHealth));
         }
     }
@@ -766,6 +561,7 @@ public class UIManager : MonoBehaviour
         {
             healthBar.maxValue = maxHealth;
             
+            // Animação suave se a diferença for significativa
             float currentValue = healthBar.value;
             float targetValue = targetHealth;
             
@@ -801,9 +597,11 @@ public class UIManager : MonoBehaviour
     {
         if (manaBar == null || isUpdatingManaBar) return;
         
+        // Validar valores
         maxMana = Mathf.Max(1, maxMana);
         currentMana = Mathf.Clamp(currentMana, 0, maxMana);
         
+        // Verificar mudanças
         bool hasChanged = (currentMana != cachedMana || maxMana != cachedMaxMana);
         
         if (hasChanged)
@@ -811,11 +609,13 @@ public class UIManager : MonoBehaviour
             cachedMana = currentMana;
             cachedMaxMana = maxMana;
             
+            // Parar coroutine anterior se existir
             if (manaBarUpdateCoroutine != null)
             {
                 StopCoroutine(manaBarUpdateCoroutine);
             }
             
+            // Iniciar nova atualização
             manaBarUpdateCoroutine = StartCoroutine(UpdateManaBarCoroutine(currentMana, maxMana));
         }
     }
@@ -830,6 +630,7 @@ public class UIManager : MonoBehaviour
         {
             manaBar.maxValue = maxMana;
             
+            // Animação suave se a diferença for significativa
             float currentValue = manaBar.value;
             float targetValue = targetMana;
             
@@ -865,11 +666,13 @@ public class UIManager : MonoBehaviour
     {
         if (levelText == null) return;
         
+        // Verificar mudança
         if (newLevel != cachedLevel)
         {
             cachedLevel = newLevel;
             levelText.text = "Level " + newLevel;
             
+            // FIX: Controlar animação para evitar scale gigante
             if (fixAnimationBugs)
             {
                 StartLevelUpAnimationSafely();
@@ -881,17 +684,22 @@ public class UIManager : MonoBehaviour
     {
         if (isLevelTextAnimating || levelText == null) return;
         
+        // Parar animação anterior se existir
         if (levelUpAnimationCoroutine != null)
         {
             StopCoroutine(levelUpAnimationCoroutine);
         }
         
+        // Garantir que temos a escala original
         if (!hasInitializedLevelTextScale)
         {
             InitializeLevelTextScale();
         }
         
+        // Resetar escala antes de animar
         levelText.transform.localScale = originalLevelTextScale;
+        
+        // Iniciar nova animação
         levelUpAnimationCoroutine = StartCoroutine(AnimateLevelUpTextSafely());
     }
     
@@ -899,293 +707,77 @@ public class UIManager : MonoBehaviour
     {
         if (playerCacheValid && cachedPlayerHealth != null)
         {
-            needsHealthUpdate = true;
-            needsManaUpdate = true;
+            UpdateHealthBarSafely(cachedPlayerHealth.CurrentHealth, cachedPlayerHealth.MaxHealth);
+            UpdateManaBarSafely(cachedPlayerHealth.CurrentMana, cachedPlayerHealth.MaxMana);
         }
     }
     
     #endregion
     
-    #region Notifications com Pooling
+    #region UI Updates
     
-    // NOVO: Sistema de Notifications com Object Pooling
-    private void ShowNotificationFromPool(string message, NotificationType type, float duration = -1f, Color? customColor = null)
+    private void UpdateNonCriticalUI()
     {
-        GameObject notification = GetPooledNotification();
-        if (notification == null) return;
-        
-        if (duration < 0) duration = notificationDuration;
-        
-        TextMeshProUGUI text = notification.GetComponentInChildren<TextMeshProUGUI>();
-        
-        if (text != null)
+        // Atualizar ouro se mudou - usando cache
+        if (goldText != null && gameManagerCacheValid && cachedGameManager != null)
         {
-            text.text = message;
-            text.color = customColor ?? GetNotificationColor(type);
+            int currentGold = cachedGameManager.goldCollected;
+            if (currentGold != cachedGold)
+            {
+                goldText.text = currentGold.ToString();
+                cachedGold = currentGold;
+            }
         }
         
-        notification.SetActive(true);
-        activeNotifications.Add(notification);
-        
-        // Remover notifications antigas se excedeu o limite
-        while (activeNotifications.Count > maxNotifications)
-        {
-            ReturnNotificationToPool(activeNotifications[0]);
-            activeNotifications.RemoveAt(0);
-        }
-        
-        StartCoroutine(ReturnNotificationAfterDelay(notification, duration));
+        // Atualizar skills se temos referências
+        UpdateSkillIcons();
     }
     
-    private GameObject GetPooledNotification()
+    private void UpdateSkillIcons()
     {
-        if (notificationPool.Count > 0)
-        {
-            return notificationPool.Dequeue();
-        }
-        
-        // Se pool está vazio, criar novo (fallback)
-        if (notificationPrefab != null && notificationContainer != null)
-        {
-            return Instantiate(notificationPrefab, notificationContainer);
-        }
-        
-        return null;
-    }
-    
-    private void ReturnNotificationToPool(GameObject notification)
-    {
-        if (notification != null)
-        {
-            notification.SetActive(false);
-            notificationPool.Enqueue(notification);
-        }
-    }
-    
-    private IEnumerator ReturnNotificationAfterDelay(GameObject notification, float delay)
-    {
-        yield return new WaitForSeconds(delay);
-        
-        if (notification != null && activeNotifications.Contains(notification))
-        {
-            activeNotifications.Remove(notification);
-            ReturnNotificationToPool(notification);
-        }
-    }
-    
-    // NOVO: Método depreciado para compatibilidade
-    private void ShowNotification(string message, NotificationType type, float duration = -1f, Color? customColor = null)
-    {
-        ShowNotificationFromPool(message, type, duration, customColor);
-    }
-    
-    #endregion
-    
-    #region Tooltips
-    
-    public void ShowTooltip(Item item, Vector3 position)
-    {
-        if (tooltip == null || tooltipTitle == null || tooltipDescription == null)
-        {
+        if (!playerCacheValid || cachedPlayer == null || skillIcons == null || skillIcons.Length == 0)
             return;
-        }
         
-        tooltipTitle.text = item.name;
+        var skillController = cachedPlayer.GetSkillController();
+        if (skillController == null) return;
         
-        // NOVO: String Builder para evitar allocations
-        var description = new System.Text.StringBuilder();
-        description.AppendLine(item.description);
+        var skills = skillController.GetAllSkills();
+        if (skills == null) return;
         
-        if (item.type == ItemType.Weapon)
+        for (int i = 0; i < skillIcons.Length; i++)
         {
-            description.AppendLine($"Dano Físico: {item.physicalDamage}");
-            if (item.fireDamage > 0) description.AppendLine($"Dano de Fogo: {item.fireDamage}");
-            if (item.iceDamage > 0) description.AppendLine($"Dano de Gelo: {item.iceDamage}");
-            if (item.lightningDamage > 0) description.AppendLine($"Dano Elétrico: {item.lightningDamage}");
-            if (item.poisonDamage > 0) description.AppendLine($"Dano de Veneno: {item.poisonDamage}");
-        }
-        
-        if (item.strengthModifier > 0) description.AppendLine($"Força: +{item.strengthModifier}");
-        if (item.intelligenceModifier > 0) description.AppendLine($"Inteligência: +{item.intelligenceModifier}");
-        if (item.dexterityModifier > 0) description.AppendLine($"Destreza: +{item.dexterityModifier}");
-        if (item.vitalityModifier > 0) description.AppendLine($"Vitalidade: +{item.vitalityModifier}");
-        
-        if (item.type == ItemType.Consumable)
-        {
-            if (item.healthRestore > 0) description.AppendLine($"Recupera {item.healthRestore} de vida");
-            if (item.manaRestore > 0) description.AppendLine($"Recupera {item.manaRestore} de mana");
-        }
-        
-        description.AppendLine($"Nível: {item.level}");
-        description.AppendLine(GetRarityColoredText(item.rarity));
-        
-        tooltipDescription.text = description.ToString();
-        
-        tooltip.transform.position = position;
-        tooltip.SetActive(true);
-        tooltipVisible = true;
-        
-        if (tooltipCoroutine != null)
-        {
-            StopCoroutine(tooltipCoroutine);
-        }
-        tooltipCoroutine = StartCoroutine(AutoHideTooltip());
-    }
-
-    private string GetRarityColoredText(ItemRarity rarity)
-    {
-        switch (rarity)
-        {
-            case ItemRarity.Common:
-                return "<color=white>Comum</color>";
-            case ItemRarity.Uncommon:
-                return "<color=green>Incomum</color>";
-            case ItemRarity.Rare:
-                return "<color=blue>Raro</color>";
-            case ItemRarity.Epic:
-                return "<color=purple>Épico</color>";
-            case ItemRarity.Legendary:
-                return "<color=orange>Lendário</color>";
-            default:
-                return "<color=white>Comum</color>";
-        }
-    }
-    
-    public void HideTooltip()
-    {
-        if (tooltip != null)
-        {
-            tooltip.SetActive(false);
-            tooltipVisible = false;
-        }
-        
-        if (tooltipCoroutine != null)
-        {
-            StopCoroutine(tooltipCoroutine);
-            tooltipCoroutine = null;
-        }
-    }
-    
-    private IEnumerator AutoHideTooltip()
-    {
-        yield return new WaitForSeconds(5f);
-        HideTooltip();
-    }
-    
-    #endregion
-    
-    #region Animations
-    
-    private IEnumerator FlashHealthBar()
-    {
-        if (healthBar == null) yield break;
-        
-        Image healthFill = healthBar.fillRect.GetComponent<Image>();
-        if (healthFill == null) yield break;
-        
-        Color originalColor = healthFill.color;
-        Color flashColor = Color.red;
-        
-        // Flash rápido
-        healthFill.color = flashColor;
-        yield return new WaitForSeconds(0.1f);
-        healthFill.color = originalColor;
-        yield return new WaitForSeconds(0.05f);
-        healthFill.color = flashColor;
-        yield return new WaitForSeconds(0.1f);
-        healthFill.color = originalColor;
-    }
-    
-    private IEnumerator AnimateLevelUpTextSafely()
-    {
-        if (levelText == null || isLevelTextAnimating) yield break;
-        
-        isLevelTextAnimating = true;
-        
-        if (!hasInitializedLevelTextScale)
-        {
-            originalLevelTextScale = Vector3.one;
-        }
-        
-        levelText.transform.localScale = originalLevelTextScale;
-        
-        float duration = levelUpAnimationDuration;
-        float elapsed = 0f;
-        float maxScale = maxLevelUpAnimationScale;
-        
-        // Primeira fase: crescer
-        while (elapsed < duration * 0.5f)
-        {
-            if (levelText == null) break;
+            if (skillIcons[i] != null)
+            {
+                if (i < skills.Count)
+                {
+                    skillIcons[i].gameObject.SetActive(true);
+                    // Configurar cor baseada no tipo de skill
+                    skillIcons[i].color = GetSkillTypeColor(skills[i].type);
+                }
+                else
+                {
+                    skillIcons[i].gameObject.SetActive(false);
+                }
+            }
             
-            elapsed += Time.deltaTime;
-            float progress = (elapsed / (duration * 0.5f));
-            float currentScale = Mathf.Lerp(1f, maxScale, progress);
-            
-            levelText.transform.localScale = originalLevelTextScale * currentScale;
-            yield return null;
-        }
-        
-        // Segunda fase: voltar ao normal
-        elapsed = 0f;
-        while (elapsed < duration * 0.5f)
-        {
-            if (levelText == null) break;
-            
-            elapsed += Time.deltaTime;
-            float progress = (elapsed / (duration * 0.5f));
-            float currentScale = Mathf.Lerp(maxScale, 1f, progress);
-            
-            levelText.transform.localScale = originalLevelTextScale * currentScale;
-            yield return null;
-        }
-        
-        if (levelText != null)
-        {
-            levelText.transform.localScale = originalLevelTextScale;
-        }
-        
-        isLevelTextAnimating = false;
-        levelUpAnimationCoroutine = null;
-    }
-    
-    private IEnumerator AnimateExperienceBarSafely(int targetExp, int maxExp)
-    {
-        if (experienceBar == null) yield break;
-        
-        maxExp = Mathf.Max(1, maxExp);
-        targetExp = Mathf.Clamp(targetExp, 0, maxExp);
-        
-        float currentValue = experienceBar.value;
-        float targetValue = targetExp;
-        experienceBar.maxValue = maxExp;
-        
-        float duration = 0.5f;
-        float elapsed = 0f;
-        
-        while (elapsed < duration && experienceBar != null)
-        {
-            elapsed += Time.deltaTime;
-            float progress = elapsed / duration;
-            experienceBar.value = Mathf.Lerp(currentValue, targetValue, progress);
-            yield return null;
-        }
-        
-        if (experienceBar != null)
-        {
-            experienceBar.value = targetValue;
+            // Atualizar cooldown overlays
+            if (skillCooldowns != null && i < skillCooldowns.Length && skillCooldowns[i] != null)
+            {
+                if (i < skills.Count && skillController.IsSkillOnCooldown(i))
+                {
+                    float remaining = skillController.GetSkillCooldownRemaining(i);
+                    float total = skills[i].GetActualCooldown(cachedPlayerStats);
+                    
+                    skillCooldowns[i].gameObject.SetActive(true);
+                    skillCooldowns[i].fillAmount = remaining / total;
+                }
+                else
+                {
+                    skillCooldowns[i].gameObject.SetActive(false);
+                }
+            }
         }
     }
-    
-    private void ShowLevelUpEffects()
-    {
-        // Add particle effects, screen shake, etc. here
-        Debug.Log("Level Up Effects!");
-    }
-    
-    #endregion
-    
-    #region UI Management
     
     public void ForceUpdateAllUI()
     {
@@ -1195,23 +787,17 @@ public class UIManager : MonoBehaviour
             if (!playerCacheValid) return;
         }
         
+        // Resetar cache para forçar atualização
         ResetUICache();
         
-        // Force update all
-        needsHealthUpdate = true;
-        needsManaUpdate = true;
-        needsSkillUpdate = true;
-        needsGoldUpdate = true;
+        // FIX: Atualizar usando dados reais do PlayerHealthManager
+        UpdateHealthBarSafely(cachedPlayerHealth.CurrentHealth, cachedPlayerHealth.MaxHealth);
+        UpdateManaBarSafely(cachedPlayerHealth.CurrentMana, cachedPlayerHealth.MaxMana);
+        UpdateLevelTextSafely(cachedPlayerStats.Level);
         
-        UpdateCriticalUI();
         UpdateNonCriticalUI();
-        UpdateSkillIcons();
-        UpdateGoldDisplay();
         
-        if (cachedPlayerStats != null)
-        {
-            UpdateLevelTextSafely(cachedPlayerStats.Level);
-        }
+        Debug.Log("UIManager: Force update completo realizado");
     }
     
     public void RefreshUI()
@@ -1226,12 +812,13 @@ public class UIManager : MonoBehaviour
             return;
         }
         
-        // NOVO: Clear usando pool se disponível
+        // Limpar container
         foreach (Transform child in itemContainer)
         {
             Destroy(child.gameObject);
         }
         
+        // Criar elementos de UI para cada item usando cache
         if (cachedPlayer?.inventory?.items != null)
         {
             foreach (Item item in cachedPlayer.inventory.items)
@@ -1256,33 +843,48 @@ public class UIManager : MonoBehaviour
         cachedExperience = -1;
         cachedLevel = -1;
         cachedGold = -1;
-        
-        // Reset hashes
-      //  lastHealthHash = 0;
-       // lastManaHash = 0;
-        lastSkillHash = 0;
-        
-        // Set update flags
-        needsHealthUpdate = true;
-        needsManaUpdate = true;
-        needsSkillUpdate = true;
-        needsGoldUpdate = true;
     }
     
     #endregion
     
-    #region Notifications Processing
+    #region Notifications
+    
+    private void ShowNotification(string message, NotificationType type, float duration = -1f, Color? customColor = null)
+    {
+        if (notificationPrefab == null || notificationContainer == null) return;
+        
+        if (duration < 0) duration = notificationDuration;
+        
+        GameObject notification = Instantiate(notificationPrefab, notificationContainer);
+        TextMeshProUGUI text = notification.GetComponentInChildren<TextMeshProUGUI>();
+        
+        if (text != null)
+        {
+            text.text = message;
+            text.color = customColor ?? GetNotificationColor(type);
+        }
+        
+        // Adicionar à lista de notifications ativas
+        activeNotifications.Add(notification);
+        
+        // Remover notifications antigas se excedeu o limite
+        while (activeNotifications.Count > maxNotifications)
+        {
+            GameObject oldNotification = activeNotifications[0];
+            activeNotifications.RemoveAt(0);
+            if (oldNotification != null)
+            {
+                Destroy(oldNotification);
+            }
+        }
+        
+        StartCoroutine(DestroyNotificationAfterDelay(notification, duration));
+    }
     
     private void ProcessNotificationQueue()
     {
-        // NOVO: Automatic cleanup of expired notifications
-        for (int i = activeNotifications.Count - 1; i >= 0; i--)
-        {
-            if (activeNotifications[i] == null)
-            {
-                activeNotifications.RemoveAt(i);
-            }
-        }
+        // Processar fila de notifications se necessário
+        // (Para futuras expansões do sistema)
     }
     
     private void ClearAllNotifications()
@@ -1291,15 +893,20 @@ public class UIManager : MonoBehaviour
         {
             if (notification != null)
             {
-                ReturnNotificationToPool(notification);
+                Destroy(notification);
             }
         }
         activeNotifications.Clear();
+        
+        while (notificationQueue.Count > 0)
+        {
+            GameObject notification = notificationQueue.Dequeue();
+            if (notification != null)
+            {
+                Destroy(notification);
+            }
+        }
     }
-    
-    #endregion
-    
-    #region Color Utilities
     
     private Color GetNotificationColor(NotificationType type)
     {
@@ -1343,18 +950,315 @@ public class UIManager : MonoBehaviour
         }
     }
     
+    private IEnumerator DestroyNotificationAfterDelay(GameObject notification, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        
+        if (notification != null)
+        {
+            activeNotifications.Remove(notification);
+            Destroy(notification);
+        }
+    }
+    
     #endregion
     
-    #region Utility Methods
+    #region Tooltips
+    
+    public void ShowTooltip(Item item, Vector3 position)
+    {
+        if (tooltip == null || tooltipTitle == null || tooltipDescription == null)
+        {
+            return;
+        }
+        
+        tooltipTitle.text = item.name;
+        
+        string description = item.description + "\n";
+        
+        if (item.type == ItemType.Weapon)
+        {
+            description += "Dano Físico: " + item.physicalDamage + "\n";
+            if (item.fireDamage > 0) description += "Dano de Fogo: " + item.fireDamage + "\n";
+            if (item.iceDamage > 0) description += "Dano de Gelo: " + item.iceDamage + "\n";
+            if (item.lightningDamage > 0) description += "Dano Elétrico: " + item.lightningDamage + "\n";
+            if (item.poisonDamage > 0) description += "Dano de Veneno: " + item.poisonDamage + "\n";
+        }
+        
+        if (item.strengthModifier > 0) description += "Força: +" + item.strengthModifier + "\n";
+        if (item.intelligenceModifier > 0) description += "Inteligência: +" + item.intelligenceModifier + "\n";
+        if (item.dexterityModifier > 0) description += "Destreza: +" + item.dexterityModifier + "\n";
+        if (item.vitalityModifier > 0) description += "Vitalidade: +" + item.vitalityModifier + "\n";
+        
+        if (item.type == ItemType.Consumable)
+        {
+            if (item.healthRestore > 0) description += "Recupera " + item.healthRestore + " de vida\n";
+            if (item.manaRestore > 0) description += "Recupera " + item.manaRestore + " de mana\n";
+        }
+        
+        string rarityText = GetRarityColoredText(item.rarity);
+        
+        description += "Nível: " + item.level + "\n";
+        description += rarityText;
+        
+        tooltipDescription.text = description;
+        
+        tooltip.transform.position = position;
+        tooltip.SetActive(true);
+        tooltipVisible = true;
+        
+        // Auto-hide tooltip após algum tempo
+        if (tooltipCoroutine != null)
+        {
+            StopCoroutine(tooltipCoroutine);
+        }
+        tooltipCoroutine = StartCoroutine(AutoHideTooltip());
+    }
+
+    private string GetRarityColoredText(ItemRarity rarity)
+    {
+        switch (rarity)
+        {
+            case ItemRarity.Common:
+                return "<color=white>Comum</color>";
+            case ItemRarity.Uncommon:
+                return "<color=green>Incomum</color>";
+            case ItemRarity.Rare:
+                return "<color=blue>Raro</color>";
+            case ItemRarity.Epic:
+                return "<color=purple>Épico</color>";
+            case ItemRarity.Legendary:
+                return "<color=orange>Lendário</color>";
+            default:
+                return "<color=white>Comum</color>";
+        }
+    }
+    
+    public void HideTooltip()
+    {
+        if (tooltip != null)
+        {
+            tooltip.SetActive(false);
+            tooltipVisible = false;
+        }
+        
+        if (tooltipCoroutine != null)
+        {
+            StopCoroutine(tooltipCoroutine);
+            tooltipCoroutine = null;
+        }
+    }
+    
+    private IEnumerator AutoHideTooltip()
+    {
+        yield return new WaitForSeconds(5f); // Auto-hide após 5 segundos
+        HideTooltip();
+    }
+    
+    #endregion
+    
+    #region Fixed Animations - CORREÇÃO PRINCIPAL DO FLASH
+    
+    // FIX CRÍTICO: Flash seguro da health bar que sempre restaura a cor original
+    private void StartHealthBarFlashSafely()
+    {
+        // Se já está fazendo flash, não iniciar outro
+        if (isHealthBarFlashing) return;
+        
+        // Garantir que temos a cor original inicializada
+        if (!hasInitializedHealthBarColor)
+        {
+            InitializeHealthBarColor();
+        }
+        
+        // Se não conseguiu inicializar, não fazer flash
+        if (healthBarFillImage == null) return;
+        
+        // Parar qualquer flash anterior
+        if (healthBarFlashCoroutine != null)
+        {
+            StopCoroutine(healthBarFlashCoroutine);
+        }
+        
+        // Iniciar novo flash
+        healthBarFlashCoroutine = StartCoroutine(HealthBarFlashCoroutine());
+    }
+    
+    private IEnumerator HealthBarFlashCoroutine()
+    {
+        if (healthBarFillImage == null) yield break;
+        
+        isHealthBarFlashing = true;
+        
+        // Salvar cor atual (pode ter sido alterada por outras animações)
+        Color currentColor = healthBarFillImage.color;
+        
+        // Garantir que a cor original está correta
+        if (!hasInitializedHealthBarColor)
+        {
+            originalHealthBarColor = currentColor;
+        }
+        
+        // Realizar o flash
+        for (int i = 0; i < flashCount; i++)
+        {
+            // Flash para vermelho
+            if (healthBarFillImage != null)
+            {
+                healthBarFillImage.color = healthBarFlashColor;
+            }
+            
+            yield return new WaitForSeconds(flashDuration / (flashCount * 2));
+            
+            // Voltar para cor original
+            if (healthBarFillImage != null)
+            {
+                healthBarFillImage.color = originalHealthBarColor;
+            }
+            
+            yield return new WaitForSeconds(flashDuration / (flashCount * 2));
+        }
+        
+        // GARANTIA FINAL: Sempre restaurar cor original
+        if (healthBarFillImage != null)
+        {
+            healthBarFillImage.color = originalHealthBarColor;
+        }
+        
+        isHealthBarFlashing = false;
+        healthBarFlashCoroutine = null;
+    }
+    
+    // FIX: Animação de level up corrigida para evitar scale gigante
+    private IEnumerator AnimateLevelUpTextSafely()
+    {
+        if (levelText == null || isLevelTextAnimating) yield break;
+        
+        isLevelTextAnimating = true;
+        
+        // Garantir escala original
+        if (!hasInitializedLevelTextScale)
+        {
+            originalLevelTextScale = Vector3.one;
+        }
+        
+        // Resetar para escala original
+        levelText.transform.localScale = originalLevelTextScale;
+        
+        float duration = levelUpAnimationDuration;
+        float elapsed = 0f;
+        float maxScale = maxLevelUpAnimationScale;
+        
+        // Primeira fase: crescer
+        while (elapsed < duration * 0.5f)
+        {
+            if (levelText == null) break; // Safety check
+            
+            elapsed += Time.deltaTime;
+            float progress = (elapsed / (duration * 0.5f));
+            float currentScale = Mathf.Lerp(1f, maxScale, progress);
+            
+            levelText.transform.localScale = originalLevelTextScale * currentScale;
+            yield return null;
+        }
+        
+        // Segunda fase: voltar ao normal
+        elapsed = 0f;
+        while (elapsed < duration * 0.5f)
+        {
+            if (levelText == null) break; // Safety check
+            
+            elapsed += Time.deltaTime;
+            float progress = (elapsed / (duration * 0.5f));
+            float currentScale = Mathf.Lerp(maxScale, 1f, progress);
+            
+            levelText.transform.localScale = originalLevelTextScale * currentScale;
+            yield return null;
+        }
+        
+        // Garantir que voltou ao tamanho original
+        if (levelText != null)
+        {
+            levelText.transform.localScale = originalLevelTextScale;
+        }
+        
+        isLevelTextAnimating = false;
+        levelUpAnimationCoroutine = null;
+    }
+    
+    // FIX: Animação de experience bar com bounds checking
+    private IEnumerator AnimateExperienceBarSafely(int targetExp, int maxExp)
+    {
+        if (experienceBar == null) yield break;
+        
+        // Validar valores
+        maxExp = Mathf.Max(1, maxExp);
+        targetExp = Mathf.Clamp(targetExp, 0, maxExp);
+        
+        float currentValue = experienceBar.value;
+        float targetValue = targetExp;
+        experienceBar.maxValue = maxExp;
+        
+        float duration = 0.5f;
+        float elapsed = 0f;
+        
+        while (elapsed < duration && experienceBar != null)
+        {
+            elapsed += Time.deltaTime;
+            float progress = elapsed / duration;
+            experienceBar.value = Mathf.Lerp(currentValue, targetValue, progress);
+            yield return null;
+        }
+        
+        if (experienceBar != null)
+        {
+            experienceBar.value = targetValue;
+        }
+    }
+    
+    private IEnumerator AnimateGoldText(int targetGold)
+    {
+        if (goldText == null) yield break;
+        
+        // Validação do texto atual
+        int currentGold;
+        if (!int.TryParse(goldText.text, out currentGold))
+        {
+            currentGold = 0;
+        }
+        
+        float duration = 0.3f;
+        float elapsed = 0f;
+        
+        while (elapsed < duration && goldText != null)
+        {
+            elapsed += Time.deltaTime;
+            float progress = elapsed / duration;
+            int displayGold = Mathf.RoundToInt(Mathf.Lerp(currentGold, targetGold, progress));
+            goldText.text = displayGold.ToString();
+            yield return null;
+        }
+        
+        if (goldText != null)
+        {
+            goldText.text = targetGold.ToString();
+        }
+    }
+    
+    #endregion
+    
+    #region Utility
     
     private void ToggleAllUI(bool visible)
     {
+        // Toggle visibility de todos os elementos principais da UI
         if (healthBar != null) healthBar.gameObject.SetActive(visible);
         if (manaBar != null) manaBar.gameObject.SetActive(visible);
         if (experienceBar != null) experienceBar.gameObject.SetActive(visible);
         if (levelText != null) levelText.gameObject.SetActive(visible);
         if (goldText != null) goldText.gameObject.SetActive(visible);
         
+        // Skills
         if (skillIcons != null)
         {
             foreach (var icon in skillIcons)
@@ -1363,20 +1267,24 @@ public class UIManager : MonoBehaviour
             }
         }
         
+        // Notifications container
         if (notificationContainer != null)
         {
             notificationContainer.gameObject.SetActive(visible);
         }
     }
     
+    // FIX: Método para parar todas as animações
     private void StopAllAnimations()
     {
+        // Parar animação de level up
         if (levelUpAnimationCoroutine != null)
         {
             StopCoroutine(levelUpAnimationCoroutine);
             levelUpAnimationCoroutine = null;
         }
         
+        // Parar animações das barras
         if (healthBarUpdateCoroutine != null)
         {
             StopCoroutine(healthBarUpdateCoroutine);
@@ -1389,32 +1297,91 @@ public class UIManager : MonoBehaviour
             manaBarUpdateCoroutine = null;
         }
         
+        // FIX CRÍTICO: Parar flash da health bar e restaurar cor
+        if (healthBarFlashCoroutine != null)
+        {
+            StopCoroutine(healthBarFlashCoroutine);
+            healthBarFlashCoroutine = null;
+            
+            // GARANTIR que a cor seja restaurada
+            if (healthBarFillImage != null && hasInitializedHealthBarColor)
+            {
+                healthBarFillImage.color = originalHealthBarColor;
+            }
+            
+            isHealthBarFlashing = false;
+        }
+        
+        // Resetar flags
         isLevelTextAnimating = false;
         isUpdatingHealthBar = false;
         isUpdatingManaBar = false;
         
+        // Garantir que level text volte ao tamanho normal
         if (levelText != null && hasInitializedLevelTextScale)
         {
             levelText.transform.localScale = originalLevelTextScale;
         }
     }
     
+    /// <summary>
+    /// Força refresh de todos os elementos da UI
+    /// </summary>
     public void ForceRefreshAll()
     {
+        // Parar animações primeiro
         StopAllAnimations();
         
+        // Invalidar todos os caches
         playerCacheValid = false;
         gameManagerCacheValid = false;
         
+        // Re-cachear
         TryCacheComponents();
+        
+        // Atualizar tudo
         ForceUpdateAllUI();
+        
+        Debug.Log("UIManager: Refresh completo forçado");
     }
     
+    /// <summary>
+    /// Método público para resetar health bar color (para casos de emergência)
+    /// </summary>
+    [ContextMenu("Reset Health Bar Color")]
+    public void ResetHealthBarColor()
+    {
+        // Parar qualquer flash
+        if (healthBarFlashCoroutine != null)
+        {
+            StopCoroutine(healthBarFlashCoroutine);
+            healthBarFlashCoroutine = null;
+        }
+        
+        isHealthBarFlashing = false;
+        
+        // Reinicializar cor
+        hasInitializedHealthBarColor = false;
+        InitializeHealthBarColor();
+        
+        // Aplicar cor original
+        if (healthBarFillImage != null)
+        {
+            healthBarFillImage.color = originalHealthBarColor;
+        }
+        
+        Debug.Log($"UIManager: Cor da health bar resetada para {originalHealthBarColor}");
+    }
+    
+    /// <summary>
+    /// Método público para resetar level text scale (para casos de emergência)
+    /// </summary>
     [ContextMenu("Reset Level Text Scale")]
     public void ResetLevelTextScale()
     {
         if (levelText != null)
         {
+            // Parar qualquer animação
             if (levelUpAnimationCoroutine != null)
             {
                 StopCoroutine(levelUpAnimationCoroutine);
@@ -1423,6 +1390,7 @@ public class UIManager : MonoBehaviour
             
             isLevelTextAnimating = false;
             
+            // Resetar para escala original ou padrão
             if (hasInitializedLevelTextScale)
             {
                 levelText.transform.localScale = originalLevelTextScale;
@@ -1433,40 +1401,14 @@ public class UIManager : MonoBehaviour
                 originalLevelTextScale = Vector3.one;
                 hasInitializedLevelTextScale = true;
             }
+            
+            Debug.Log($"UIManager: Level text scale resetado para {levelText.transform.localScale}");
         }
     }
     
-    #endregion
-    
-    #region Debug Methods
-    
-    [ContextMenu("Debug Performance Stats")]
-    public void DebugPerformanceStats()
-    {
-        Debug.Log($"=== UI MANAGER PERFORMANCE ===");
-        Debug.Log($"Average Frame Time: {avgFrameTime:F4}s ({(1f/avgFrameTime):F1} FPS)");
-        Debug.Log($"UI Update Interval: {uiUpdateInterval:F3}s");
-        Debug.Log($"Skill Update Interval: {skillUpdateInterval:F3}s");
-        Debug.Log($"Gold Update Interval: {goldUpdateInterval:F3}s");
-        Debug.Log($"Active Notifications: {activeNotifications.Count}");
-        Debug.Log($"Notification Pool Size: {notificationPool.Count}");
-        Debug.Log($"Player Cache Valid: {playerCacheValid}");
-        Debug.Log($"GameManager Cache Valid: {gameManagerCacheValid}");
-        Debug.Log($"Smart Updates Enabled: {enableSmartUpdates}");
-        Debug.Log($"Lazy Loading Enabled: {enableLazyLoading}");
-    }
-    
-    [ContextMenu("Force Performance Optimization")]
-    public void ForcePerformanceOptimization()
-    {
-        // Increase update intervals for better performance
-        uiUpdateInterval = Mathf.Min(uiUpdateInterval * 1.5f, 0.5f);
-        skillUpdateInterval = Mathf.Min(skillUpdateInterval * 1.5f, 1f);
-        goldUpdateInterval = Mathf.Min(goldUpdateInterval * 1.5f, 2f);
-        
-        Debug.Log("Performance optimization applied!");
-    }
-    
+    /// <summary>
+    /// Debug para verificar estado do cache
+    /// </summary>
     [ContextMenu("Debug Cache Status")]
     public void DebugCacheStatus()
     {
@@ -1481,11 +1423,69 @@ public class UIManager : MonoBehaviour
         Debug.Log($"Level Text Animando: {isLevelTextAnimating}");
         Debug.Log($"Health Bar Atualizando: {isUpdatingHealthBar}");
         Debug.Log($"Mana Bar Atualizando: {isUpdatingManaBar}");
+        Debug.Log($"Health Bar Fazendo Flash: {isHealthBarFlashing}");
+        Debug.Log($"Health Bar Color Inicializada: {hasInitializedHealthBarColor}");
+        Debug.Log($"Health Bar Color Original: {originalHealthBarColor}");
         Debug.Log($"Level Text Scale Inicializado: {hasInitializedLevelTextScale}");
         Debug.Log($"Level Text Scale Original: {originalLevelTextScale}");
         if (levelText != null)
         {
             Debug.Log($"Level Text Scale Atual: {levelText.transform.localScale}");
+        }
+        if (healthBarFillImage != null)
+        {
+            Debug.Log($"Health Bar Color Atual: {healthBarFillImage.color}");
+        }
+    }
+    
+    /// <summary>
+    /// Debug para verificar estado das barras
+    /// </summary>
+    [ContextMenu("Debug Bars Status")]
+    public void DebugBarsStatus()
+    {
+        Debug.Log($"=== BARS STATUS ===");
+        
+        if (healthBar != null)
+        {
+            Debug.Log($"Health Bar - Value: {healthBar.value}, Max: {healthBar.maxValue}, Min: {healthBar.minValue}");
+        }
+        else
+        {
+            Debug.Log("Health Bar: NULL");
+        }
+        
+        if (manaBar != null)
+        {
+            Debug.Log($"Mana Bar - Value: {manaBar.value}, Max: {manaBar.maxValue}, Min: {manaBar.minValue}");
+        }
+        else
+        {
+            Debug.Log("Mana Bar: NULL");
+        }
+        
+        if (experienceBar != null)
+        {
+            Debug.Log($"Experience Bar - Value: {experienceBar.value}, Max: {experienceBar.maxValue}, Min: {experienceBar.minValue}");
+        }
+        else
+        {
+            Debug.Log("Experience Bar: NULL");
+        }
+        
+        Debug.Log($"Cached Health: {cachedHealth}/{cachedMaxHealth}");
+        Debug.Log($"Cached Mana: {cachedMana}/{cachedMaxMana}");
+        Debug.Log($"Cached Experience: {cachedExperience}");
+        Debug.Log($"Cached Level: {cachedLevel}");
+        
+        if (playerCacheValid && cachedPlayerHealth != null)
+        {
+            Debug.Log($"Real Health: {cachedPlayerHealth.CurrentHealth}/{cachedPlayerHealth.MaxHealth}");
+            Debug.Log($"Real Mana: {cachedPlayerHealth.CurrentMana}/{cachedPlayerHealth.MaxMana}");
+        }
+        else
+        {
+            Debug.Log("Player Health Manager: NULL ou Cache Inválido");
         }
     }
     
@@ -1493,9 +1493,10 @@ public class UIManager : MonoBehaviour
     
     private void OnDestroy()
     {
+        // Parar todas as animações antes de destruir
         StopAllAnimations();
         
-        // Unsubscribe from all events
+        // IMPORTANTE: Sempre desregistrar eventos
         EventManager.Unsubscribe<PlayerHealthChangedEvent>(OnPlayerHealthChanged);
         EventManager.Unsubscribe<PlayerManaChangedEvent>(OnPlayerManaChanged);
         EventManager.Unsubscribe<PlayerLevelUpEvent>(OnPlayerLevelUp);
@@ -1513,8 +1514,10 @@ public class UIManager : MonoBehaviour
         EventManager.Unsubscribe<PlayerDestroyedEvent>(OnPlayerDestroyed);
         EventManager.Unsubscribe<SceneTransitionEvent>(OnSceneTransition);
         
+        // Limpar notifications
         ClearAllNotifications();
         
+        // Parar coroutines
         if (tooltipCoroutine != null)
         {
             StopCoroutine(tooltipCoroutine);
