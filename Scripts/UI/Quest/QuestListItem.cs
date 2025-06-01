@@ -9,6 +9,7 @@ using RPG.UI.Quest;
 
 /// <summary>
 /// Item de quest melhorado para UI com hover effects, progress tracking e visual feedback
+/// CORRIGIDO: Conflito de namespace com Quest resolvido usando referência global explícita
 /// </summary>
 public class QuestListItem : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler
 {
@@ -44,8 +45,8 @@ public class QuestListItem : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
     public Color completedBackgroundColor = new Color(0.1f, 0.4f, 0.1f, 0.8f);
     public Color urgentBackgroundColor = new Color(0.4f, 0.1f, 0.1f, 0.8f);
     
-    // State
-    private Quest quest;
+    // State - USANDO REFERÊNCIA GLOBAL EXPLÍCITA
+    private global::Quest quest; // EXPLÍCITO: usar Quest do namespace global
     private QuestUI questUI;
     private bool isHovered = false;
     private bool isSelected = false;
@@ -81,7 +82,7 @@ public class QuestListItem : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
             itemButton.onClick.AddListener(OnClick);
     }
     
-    public void SetupQuest(Quest quest, QuestUI questUI)
+    public void SetupQuest(global::Quest quest, QuestUI questUI) // EXPLÍCITO
     {
         this.quest = quest;
         this.questUI = questUI;
@@ -736,7 +737,7 @@ public class QuestListItem : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
     
     #region Public Interface
     
-    public Quest GetQuest()
+    public global::Quest GetQuest() // EXPLÍCITO
     {
         return quest;
     }
