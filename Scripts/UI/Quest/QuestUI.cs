@@ -9,6 +9,7 @@ namespace RPG.UI.Quest
 {
     /// <summary>
     /// Sistema completo de UI para quests com filtros, busca e organização
+    /// CORRIGIDO: Conflito de namespace com Quest
     /// </summary>
     public class QuestUI : MonoBehaviour
     {
@@ -20,7 +21,7 @@ namespace RPG.UI.Quest
         [Header("Main Panels")]
         public GameObject questLogPanel;
         public GameObject questDetailsPanel;
-        public GameObject questDialogPanel;
+        public GameObject questDialogPanelUI; // RENOMEADO para evitar conflito
         public GameObject questTrackingPanel;
 
         [Header("Quest Log")]
@@ -49,7 +50,6 @@ namespace RPG.UI.Quest
         public Button trackButton;
         
         [Header("Quest Dialog")]
-        public GameObject questDialogPanel;
         public TextMeshProUGUI npcNameText;
         public TextMeshProUGUI questDialogText;
         public Transform questOptionsContainer;
@@ -78,11 +78,11 @@ namespace RPG.UI.Quest
         public Color normalPriorityColor = Color.white;
         public Color lowPriorityColor = Color.gray;
         
-        // State
+        // State - USANDO REFERÊNCIA GLOBAL EXPLÍCITA
         private QuestManager questManager;
-        private Quest selectedQuest;
+        private global::Quest selectedQuest; // EXPLÍCITO: usar Quest do namespace global
         private NPCController currentNPC;
-        private List<Quest> filteredQuests = new List<Quest>();
+        private List<global::Quest> filteredQuests = new List<global::Quest>(); // EXPLÍCITO
         private HashSet<string> trackedQuestIds = new HashSet<string>();
         
         // Filters
@@ -115,7 +115,7 @@ namespace RPG.UI.Quest
             // Initially hide all panels
             SetPanelActive(questLogPanel, false);
             SetPanelActive(questDetailsPanel, false);
-            SetPanelActive(questDialogPanel, false);
+            SetPanelActive(questDialogPanelUI, false); // CORRIGIDO
             
             // Setup button events
             if (abandonButton != null)
@@ -236,7 +236,7 @@ namespace RPG.UI.Quest
         
         public void ShowQuestDialog(NPCController npc)
         {
-            if (questDialogPanel == null || npc == null) return;
+            if (questDialogPanelUI == null || npc == null) return; // CORRIGIDO
             
             currentNPC = npc;
             
@@ -251,13 +251,13 @@ namespace RPG.UI.Quest
             // Setup quest options
             SetupQuestDialogOptions(npc);
             
-            SetPanelActive(questDialogPanel, true);
+            SetPanelActive(questDialogPanelUI, true); // CORRIGIDO
             PlaySound(openSound);
         }
         
         public void CloseQuestDialog()
         {
-            SetPanelActive(questDialogPanel, false);
+            SetPanelActive(questDialogPanelUI, false); // CORRIGIDO
             currentNPC = null;
             PlaySound(closeSound);
         }
@@ -289,7 +289,7 @@ namespace RPG.UI.Quest
             filteredQuests = GetFilteredQuests();
             
             // Create quest items
-            foreach (Quest quest in filteredQuests)
+            foreach (global::Quest quest in filteredQuests) // EXPLÍCITO
             {
                 GameObject questItemObject = Instantiate(questItemPrefab, questListContainer);
                 QuestListItem questItem = questItemObject.GetComponent<QuestListItem>();
@@ -308,11 +308,11 @@ namespace RPG.UI.Quest
             }
         }
         
-        private List<Quest> GetFilteredQuests()
+        private List<global::Quest> GetFilteredQuests() // EXPLÍCITO
         {
-            if (questManager == null) return new List<Quest>();
+            if (questManager == null) return new List<global::Quest>(); // EXPLÍCITO
             
-            var allQuests = new List<Quest>();
+            var allQuests = new List<global::Quest>(); // EXPLÍCITO
             
             // Collect quests based on status filter
             switch (currentStatusFilter)
@@ -364,7 +364,7 @@ namespace RPG.UI.Quest
             return allQuests;
         }
         
-        private int GetQuestSortPriority(Quest quest)
+        private int GetQuestSortPriority(global::Quest quest) // EXPLÍCITO
         {
             // Sort order: Active > Available > Completed > Failed
             switch (quest.status)
@@ -383,7 +383,7 @@ namespace RPG.UI.Quest
         
         #region Quest Details
         
-        public void ShowQuestDetails(Quest quest)
+        public void ShowQuestDetails(global::Quest quest) // EXPLÍCITO
         {
             if (questDetailsPanel == null || quest == null)
                 return;
@@ -425,7 +425,7 @@ namespace RPG.UI.Quest
             SetPanelActive(questDetailsPanel, true);
         }
         
-        private void UpdateTimeRemaining(Quest quest)
+        private void UpdateTimeRemaining(global::Quest quest) // EXPLÍCITO
         {
             if (questTimeRemainingText == null) return;
             
@@ -449,7 +449,7 @@ namespace RPG.UI.Quest
             }
         }
         
-        private void UpdateQuestProgress(Quest quest)
+        private void UpdateQuestProgress(global::Quest quest) // EXPLÍCITO
         {
             if (questProgressSlider != null)
             {
@@ -473,7 +473,7 @@ namespace RPG.UI.Quest
             }
         }
         
-        private void UpdateObjectivesList(Quest quest)
+        private void UpdateObjectivesList(global::Quest quest) // EXPLÍCITO
         {
             if (objectivesContainer == null || objectivePrefab == null) return;
             
@@ -518,7 +518,7 @@ namespace RPG.UI.Quest
             }
         }
         
-        private void UpdateRewardsList(Quest quest)
+        private void UpdateRewardsList(global::Quest quest) // EXPLÍCITO
         {
             if (rewardsContainer == null || rewardItemPrefab == null || quest.rewards == null) return;
             
@@ -572,7 +572,7 @@ namespace RPG.UI.Quest
             }
         }
         
-        private void UpdateActionButtons(Quest quest)
+        private void UpdateActionButtons(global::Quest quest) // EXPLÍCITO
         {
             // Abandon button
             if (abandonButton != null)
@@ -617,13 +617,13 @@ namespace RPG.UI.Quest
             var questsToTurnIn = npc.GetQuestsToTurnInForPlayer();
             
             // Add turn-in options first
-            foreach (Quest quest in questsToTurnIn)
+            foreach (global::Quest quest in questsToTurnIn) // EXPLÍCITO
             {
                 CreateQuestDialogOption($"Entregar: {quest.title}", quest, true, npc);
             }
             
             // Add available quest options
-            foreach (Quest quest in availableQuests)
+            foreach (global::Quest quest in availableQuests) // EXPLÍCITO
             {
                 // Check requirements
                 bool meetsRequirements = quest.CanPlayerAccept(PlayerController.Instance);
@@ -638,7 +638,7 @@ namespace RPG.UI.Quest
             CreateCloseDialogOption();
         }
         
-        private void CreateQuestDialogOption(string optionText, Quest quest, bool isTurnIn, NPCController npc, bool enabled = true)
+        private void CreateQuestDialogOption(string optionText, global::Quest quest, bool isTurnIn, NPCController npc, bool enabled = true) // EXPLÍCITO
         {
             GameObject optionObject = Instantiate(questOptionPrefab, questOptionsContainer);
             QuestDialogOption option = optionObject.GetComponent<QuestDialogOption>();
@@ -700,7 +700,7 @@ namespace RPG.UI.Quest
             }
         }
         
-        private void HandleQuestAccept(Quest quest, NPCController npc)
+        private void HandleQuestAccept(global::Quest quest, NPCController npc) // EXPLÍCITO
         {
             if (questManager != null && questManager.AcceptQuest(quest))
             {
@@ -715,7 +715,7 @@ namespace RPG.UI.Quest
             }
         }
         
-        private void HandleQuestTurnIn(Quest quest, NPCController npc)
+        private void HandleQuestTurnIn(global::Quest quest, NPCController npc) // EXPLÍCITO
         {
             if (questManager != null && questManager.TurnInQuest(quest))
             {
@@ -766,7 +766,7 @@ namespace RPG.UI.Quest
                 else
                 {
                     // Fallback setup
-                SetupBasicTrackedQuest(trackedItem, quest);
+                    SetupBasicTrackedQuest(trackedItem, quest);
                 }
             }
             
@@ -777,7 +777,7 @@ namespace RPG.UI.Quest
             }
         }
         
-        private void SetupBasicTrackedQuest(GameObject trackedItem, Quest quest)
+        private void SetupBasicTrackedQuest(GameObject trackedItem, global::Quest quest) // EXPLÍCITO
         {
             TextMeshProUGUI[] texts = trackedItem.GetComponentsInChildren<TextMeshProUGUI>();
             Slider progressSlider = trackedItem.GetComponentInChildren<Slider>();
@@ -988,7 +988,7 @@ namespace RPG.UI.Quest
             }
         }
         
-        private string GetQuestStatusDisplay(Quest quest)
+        private string GetQuestStatusDisplay(global::Quest quest) // EXPLÍCITO
         {
             string status = quest.GetStatusText();
             
