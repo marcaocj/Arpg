@@ -2,47 +2,30 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using UnityEngine.EventSystems;
-using System.Collections;
-using System.Collections.Generic;
 
 /// <summary>
-/// UI melhorada para itens do inventário com suporte a drag & drop, context menu e animações
+/// Componente de UI para exibir itens individuais no inventário
 /// </summary>
-public class InventoryItemUI : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, 
-    IPointerClickHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
+public class InventoryItemUI : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
     [Header("UI Components")]
+    public Image itemIcon;
     public Image backgroundImage;
-    public Image icon;
     public Image rarityBorder;
-    public Image qualityOverlay;
-    public TextMeshProUGUI itemName;
-    public TextMeshProUGUI stackText;
+    public TextMeshProUGUI itemNameText;
+    public TextMeshProUGUI stackCountText;
     public TextMeshProUGUI levelText;
-    public Button useButton;
-    public Button equipButton;
-    public Button destroyButton;
+    public Button itemButton;
     
-    [Header("Visual Effects")]
-    public GameObject glowEffect;
-    public ParticleSystem rarityParticles;
-    public AudioSource audioSource;
-    
-    [Header("Drag & Drop")]
-    public Transform dragParent;
-    public CanvasGroup canvasGroup;
-    
-    [Header("Animation Settings")]
-    public float hoverScale = 1.1f;
-    public float animationDuration = 0.2f;
-    public AnimationCurve scaleCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
-    
-    [Header("Colors")]
+    [Header("Visual States")]
     public Color normalColor = Color.white;
-    public Color hoveredColor = new Color(1f, 1f, 1f, 0.8f);
+    public Color hoverColor = new Color(1f, 1f, 1f, 0.8f);
     public Color selectedColor = Color.yellow;
     public Color equippedColor = Color.green;
-    public Color cannotUseColor = Color.red;
+    
+    [Header("Drag Settings")]
+    public bool enableDrag = true;
+    public float dragAlpha = 0.6f;
     
     // State
     private Item item;
@@ -51,346 +34,167 @@ public class InventoryItemUI : MonoBehaviour, IPointerEnterHandler, IPointerExit
     private bool isHovered = false;
     private bool isSelected = false;
     private bool isDragging = false;
-    private bool isEquipped = false;
-    private bool canPlayerUse = true;
     
-    // Components
+    // Drag components
+    private CanvasGroup canvasGroup;
     private RectTransform rectTransform;
-    private Vector3 originalScale;
+    private Canvas canvas;
     private Vector3 originalPosition;
-    private Transform originalParent;
-    private int originalSiblingIndex;
-    
-    // Animation
-    private Coroutine currentAnimation;
-    
-    // Cache de sprites
-    private static Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
     
     #region Initialization
     
     private void Awake()
     {
+        // Cache components
         rectTransform = GetComponent<RectTransform>();
-        
-        if (canvasGroup == null)
-            canvasGroup = GetComponent<CanvasGroup>();
+        canvasGroup = GetComponent<CanvasGroup>();
+        canvas = GetComponentInParent<Canvas>();
         
         if (canvasGroup == null)
             canvasGroup = gameObject.AddComponent<CanvasGroup>();
         
-        if (audioSource == null)
-            audioSource = GetComponent<AudioSource>();
+        // Setup button
+        if (itemButton == null)
+            itemButton = GetComponent<Button>();
         
-        originalScale = transform.localScale;
-        
-        SetupButtons();
+        if (itemButton != null)
+            itemButton.onClick.AddListener(OnItemClicked);
     }
     
-    private void SetupButtons()
-    {
-        if (useButton != null)
-            useButton.onClick.AddListener(UseItem);
-        
-        if (equipButton != null)
-            equipButton.onClick.AddListener(EquipItem);
-        
-        if (destroyButton != null)
-            destroyButton.onClick.AddListener(ShowDestroyConfirmation);
-    }
-    
+    /// <summary>
+    /// Inicializa o componente com um item
+    /// CORRIGIDO: Método com três parâmetros para compatibilidade com UIManager
+    /// </summary>
     public void Initialize(Item item, PlayerInventoryManager inventoryManager, UIManager uiManager)
     {
         this.item = item;
         this.inventoryManager = inventoryManager;
         this.uiManager = uiManager;
         
-        if (item == null)
-        {
-            Debug.LogError("InventoryItemUI: Item é nulo!");
-            return;
-        }
-        
-        UpdateUI();
-        CheckPlayerRequirements();
-        CheckEquippedStatus();
+        UpdateDisplay();
+    }
+    
+    /// <summary>
+    /// Sobrecarga para compatibilidade
+    /// </summary>
+    public void Initialize(Item item, PlayerInventoryManager inventoryManager)
+    {
+        Initialize(item, inventoryManager, null);
     }
     
     #endregion
     
-    #region UI Updates
+    #region Display Updates
     
-    private void UpdateUI()
+    public void UpdateDisplay()
     {
-        if (item == null) return;
-        
-        // Nome do item
-        if (itemName != null)
+        if (item == null)
         {
-            itemName.text = item.name;
-            itemName.color = item.GetRarityColor();
+            gameObject.SetActive(false);
+            return;
         }
         
-        // Ícone e cor de raridade
+        gameObject.SetActive(true);
+        
         UpdateIcon();
-        UpdateRarityBorder();
-        UpdateQualityOverlay();
-        
-        // Stack count
-        UpdateStackText();
-        
-        // Level
-        if (levelText != null)
-        {
-            levelText.text = item.level > 1 ? item.level.ToString() : "";
-            levelText.gameObject.SetActive(item.level > 1);
-        }
-        
-        // Background color baseado no estado
-        UpdateBackgroundColor();
-        
-        // Botões
-        UpdateButtons();
-        
-        // Efeitos especiais para itens raros
-        UpdateSpecialEffects();
+        UpdateText();
+        UpdateColors();
+        UpdateStackCount();
+        UpdateTooltip();
     }
     
     private void UpdateIcon()
     {
-        if (icon == null) return;
-        
-        // Tentar carregar sprite específico
-        if (!string.IsNullOrEmpty(item.iconSpriteName))
+        if (itemIcon != null)
         {
-            Sprite sprite;
-            if (!spriteCache.TryGetValue(item.iconSpriteName, out sprite))
+            // Tentar carregar ícone do item
+            Sprite icon = LoadItemIcon();
+            if (icon != null)
             {
-                sprite = Resources.Load<Sprite>($"ItemIcons/{item.iconSpriteName}");
-                if (sprite != null)
-                {
-                    spriteCache[item.iconSpriteName] = sprite;
-                }
-            }
-            
-            if (sprite != null)
-            {
-                icon.sprite = sprite;
-                icon.color = Color.white;
-                return;
-            }
-        }
-        
-        // Usar cor baseada no tipo se não houver sprite
-        icon.color = GetTypeColor(item.type);
-        
-        // Aplicar cor customizada do item se definida
-        if (item.itemColor != Color.white)
-        {
-            icon.color = item.itemColor;
-        }
-    }
-    
-    private void UpdateRarityBorder()
-    {
-        if (rarityBorder == null) return;
-        
-        rarityBorder.color = item.GetRarityColor();
-        rarityBorder.gameObject.SetActive(item.rarity != ItemRarity.Common);
-        
-        // Animação especial para itens lendários+ - apenas se estiver visível
-        if (item.rarity >= ItemRarity.Legendary && rarityBorder.gameObject.activeInHierarchy && gameObject.activeInHierarchy)
-        {
-            if (currentAnimation == null)
-            {
-                currentAnimation = StartCoroutine(AnimateRarityBorder());
-            }
-        }
-        else if (currentAnimation != null)
-        {
-            StopCoroutine(currentAnimation);
-            currentAnimation = null;
-        }
-    }
-    
-    private void UpdateQualityOverlay()
-    {
-        if (qualityOverlay == null) return;
-        
-        switch (item.quality)
-        {
-            case ItemQuality.Poor:
-                qualityOverlay.color = new Color(0.5f, 0.5f, 0.5f, 0.3f);
-                break;
-            case ItemQuality.Normal:
-                qualityOverlay.gameObject.SetActive(false);
-                return;
-            case ItemQuality.Good:
-                qualityOverlay.color = new Color(0f, 1f, 0f, 0.3f);
-                break;
-            case ItemQuality.Excellent:
-                qualityOverlay.color = new Color(0f, 0f, 1f, 0.3f);
-                break;
-            case ItemQuality.Perfect:
-                qualityOverlay.color = new Color(1f, 1f, 0f, 0.4f);
-                break;
-        }
-        
-        qualityOverlay.gameObject.SetActive(true);
-    }
-    
-    private void UpdateStackText()
-    {
-        if (stackText == null) return;
-        
-        if (item.IsStackable && item.currentStack > 1)
-        {
-            stackText.text = item.currentStack.ToString();
-            stackText.gameObject.SetActive(true);
-        }
-        else
-        {
-            stackText.gameObject.SetActive(false);
-        }
-    }
-    
-    private void UpdateBackgroundColor()
-    {
-        if (backgroundImage == null) return;
-        
-        Color targetColor = normalColor;
-        
-        if (!canPlayerUse)
-        {
-            targetColor = cannotUseColor;
-        }
-        else if (isEquipped)
-        {
-            targetColor = equippedColor;
-        }
-        else if (isSelected)
-        {
-            targetColor = selectedColor;
-        }
-        else if (isHovered)
-        {
-            targetColor = hoveredColor;
-        }
-        
-        backgroundImage.color = targetColor;
-    }
-    
-    private void UpdateButtons()
-    {
-        if (useButton != null)
-        {
-            useButton.gameObject.SetActive(item.IsConsumable && canPlayerUse);
-        }
-        
-        if (equipButton != null)
-        {
-            bool showEquip = item.IsEquipment && canPlayerUse && !isEquipped;
-            equipButton.gameObject.SetActive(showEquip);
-            
-            if (showEquip && equipButton.GetComponentInChildren<TextMeshProUGUI>() != null)
-            {
-                equipButton.GetComponentInChildren<TextMeshProUGUI>().text = "Equipar";
-            }
-        }
-        
-        if (destroyButton != null)
-        {
-            destroyButton.gameObject.SetActive(item.isDestroyable);
-        }
-    }
-    
-    private void UpdateSpecialEffects()
-    {
-        // Glow effect para itens raros
-        if (glowEffect != null)
-        {
-            bool shouldGlow = item.rarity >= ItemRarity.Epic;
-            glowEffect.SetActive(shouldGlow);
-        }
-        
-        // Particle effects para itens lendários
-        if (rarityParticles != null)
-        {
-            if (item.rarity >= ItemRarity.Legendary)
-            {
-                if (!rarityParticles.isPlaying)
-                {
-                    var main = rarityParticles.main;
-                    main.startColor = item.GetRarityColor();
-                    rarityParticles.Play();
-                }
+                itemIcon.sprite = icon;
+                itemIcon.color = Color.white;
             }
             else
             {
-                rarityParticles.Stop();
+                // Fallback para cor baseada no tipo
+                itemIcon.sprite = null;
+                itemIcon.color = GetItemTypeColor();
             }
         }
     }
     
-    #endregion
-    
-    #region State Management
-    
-    private void CheckPlayerRequirements()
+    private void UpdateText()
     {
-        if (inventoryManager?.playerController == null) return;
-        
-        var playerStats = inventoryManager.playerController.GetStats();
-        canPlayerUse = item.CanPlayerUse(playerStats);
-    }
-    
-    private void CheckEquippedStatus()
-    {
-        if (inventoryManager == null) return;
-        
-        isEquipped = inventoryManager.GetAllEquippedItems().Contains(item);
-    }
-    
-    public void SetSelected(bool selected)
-    {
-        if (isSelected != selected)
+        if (itemNameText != null)
         {
-            isSelected = selected;
-            UpdateBackgroundColor();
-            
-            if (selected)
+            itemNameText.text = item.name;
+            itemNameText.color = item.GetRarityColor();
+        }
+        
+        if (levelText != null)
+        {
+            if (item.level > 1)
             {
-                PlaySelectSound();
+                levelText.text = item.level.ToString();
+                levelText.gameObject.SetActive(true);
+            }
+            else
+            {
+                levelText.gameObject.SetActive(false);
             }
         }
     }
     
-    public void RefreshUI()
+    private void UpdateColors()
     {
-        if (!gameObject.activeInHierarchy) return;
+        // Background color
+        if (backgroundImage != null)
+        {
+            Color bgColor = normalColor;
+            
+            if (IsItemEquipped())
+            {
+                bgColor = equippedColor;
+            }
+            else if (isSelected)
+            {
+                bgColor = selectedColor;
+            }
+            else if (isHovered)
+            {
+                bgColor = hoverColor;
+            }
+            
+            backgroundImage.color = bgColor;
+        }
         
-        CheckPlayerRequirements();
-        CheckEquippedStatus();
-        UpdateUI();
-    }
-    
-    private void OnEnable()
-    {
-        // Atualizar UI apenas quando o objeto for ativado
-        if (item != null)
+        // Rarity border
+        if (rarityBorder != null)
         {
-            RefreshUI();
+            rarityBorder.color = item.GetRarityColor();
+            rarityBorder.gameObject.SetActive(item.rarity > ItemRarity.Common);
         }
     }
     
-    private void OnDisable()
+    private void UpdateStackCount()
     {
-        // Parar animações quando desativado
-        if (currentAnimation != null)
+        if (stackCountText != null)
         {
-            StopCoroutine(currentAnimation);
-            currentAnimation = null;
+            if (item.IsStackable && item.currentStack > 1)
+            {
+                stackCountText.text = item.currentStack.ToString();
+                stackCountText.gameObject.SetActive(true);
+            }
+            else
+            {
+                stackCountText.gameObject.SetActive(false);
+            }
         }
+    }
+    
+    private void UpdateTooltip()
+    {
+        // Tooltip será mostrado no hover
     }
     
     #endregion
@@ -402,20 +206,9 @@ public class InventoryItemUI : MonoBehaviour, IPointerEnterHandler, IPointerExit
         if (isDragging) return;
         
         isHovered = true;
-        UpdateBackgroundColor();
+        UpdateColors();
         
-        // Animação de hover
-        AnimateScale(hoverScale);
-        
-        // Mostrar tooltip
-        if (uiManager != null && item != null)
-        {
-            var playerStats = inventoryManager?.playerController?.GetStats();
-            string tooltip = item.GetDetailedDescription(playerStats);
-            ShowTooltip(tooltip);
-        }
-        
-        PlayHoverSound();
+        ShowTooltip();
     }
     
     public void OnPointerExit(PointerEventData eventData)
@@ -423,12 +216,8 @@ public class InventoryItemUI : MonoBehaviour, IPointerEnterHandler, IPointerExit
         if (isDragging) return;
         
         isHovered = false;
-        UpdateBackgroundColor();
+        UpdateColors();
         
-        // Voltar escala normal
-        AnimateScale(1f);
-        
-        // Esconder tooltip
         HideTooltip();
     }
     
@@ -436,64 +225,100 @@ public class InventoryItemUI : MonoBehaviour, IPointerEnterHandler, IPointerExit
     {
         if (eventData.button == PointerEventData.InputButton.Left)
         {
-            // Single click - selecionar
-            SetSelected(!isSelected);
+            OnItemClicked();
         }
         else if (eventData.button == PointerEventData.InputButton.Right)
         {
-            // Right click - context menu
-            ShowContextMenu();
+            OnItemRightClicked();
+        }
+    }
+    
+    private void OnItemClicked()
+    {
+        if (item == null || inventoryManager == null) return;
+        
+        // Equipar/usar item
+        if (item.IsEquipment)
+        {
+            bool success = inventoryManager.EquipItem(item);
+            if (success)
+            {
+                UpdateDisplay(); // Atualizar para mostrar como equipado
+            }
+        }
+        else if (item.IsConsumable)
+        {
+            // Usar consumível
+            if (inventoryManager.GetType().GetMethod("UseConsumableItem") != null)
+            {
+                var method = inventoryManager.GetType().GetMethod("UseConsumableItem", 
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                method?.Invoke(inventoryManager, new object[] { item });
+            }
         }
         
-        // Double click - usar/equipar
-        if (eventData.clickCount == 2)
+        // Mostrar feedback visual
+        PlayClickEffect();
+    }
+    
+    private void OnItemRightClicked()
+    {
+        if (item == null || inventoryManager == null) return;
+        
+        // Abrir menu de contexto ou ação alternativa
+        if (IsItemEquipped())
         {
-            if (item.IsConsumable)
-            {
-                UseItem();
-            }
-            else if (item.IsEquipment)
-            {
-                EquipItem();
-            }
+            // Desequipar
+            inventoryManager.UnequipItem(item);
+            UpdateDisplay();
+        }
+        else
+        {
+            // Mostrar menu de contexto (implementar se necessário)
+            Debug.Log($"Menu de contexto para {item.name}");
         }
     }
     
     #endregion
     
-    #region Drag & Drop
+    #region Drag and Drop
     
     public void OnBeginDrag(PointerEventData eventData)
     {
-        if (!item.isDroppable) return;
+        if (!enableDrag || item == null) return;
         
         isDragging = true;
-        isHovered = false;
+        originalPosition = rectTransform.position;
         
-        // Setup drag
-        originalParent = transform.parent;
-        originalSiblingIndex = transform.GetSiblingIndex();
-        originalPosition = rectTransform.anchoredPosition;
-        
-        if (dragParent != null)
+        // Tornar semi-transparente durante drag
+        if (canvasGroup != null)
         {
-            transform.SetParent(dragParent);
+            canvasGroup.alpha = dragAlpha;
+            canvasGroup.blocksRaycasts = false;
         }
         
-        canvasGroup.alpha = 0.6f;
-        canvasGroup.blocksRaycasts = false;
+        // Mover para frente na hierarquia
+        transform.SetAsLastSibling();
         
-        // Esconder tooltip
         HideTooltip();
-        
-        PlayDragSound();
     }
     
     public void OnDrag(PointerEventData eventData)
     {
         if (!isDragging) return;
         
-        rectTransform.anchoredPosition += eventData.delta / transform.lossyScale.x;
+        // Seguir o mouse
+        if (rectTransform != null && canvas != null)
+        {
+            Vector2 localPoint;
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                canvas.transform as RectTransform,
+                eventData.position,
+                canvas.worldCamera,
+                out localPoint);
+            
+            rectTransform.position = canvas.transform.TransformPoint(localPoint);
+        }
     }
     
     public void OnEndDrag(PointerEventData eventData)
@@ -502,421 +327,96 @@ public class InventoryItemUI : MonoBehaviour, IPointerEnterHandler, IPointerExit
         
         isDragging = false;
         
-        // Restore settings
-        canvasGroup.alpha = 1f;
-        canvasGroup.blocksRaycasts = true;
-        
-        // Check drop target
-        GameObject dropTargetObj = eventData.pointerCurrentRaycast.gameObject;
-        var dropTarget = dropTargetObj?.GetComponent<IDropHandler>();
-        
-        if (dropTarget == null)
+        // Restaurar transparência
+        if (canvasGroup != null)
         {
-            // Return to original position
-            ReturnToOriginalPosition();
+            canvasGroup.alpha = 1f;
+            canvasGroup.blocksRaycasts = true;
         }
         
-        PlayDropSound();
-    }
-    
-    private void ReturnToOriginalPosition()
-    {
-        transform.SetParent(originalParent);
-        transform.SetSiblingIndex(originalSiblingIndex);
-        rectTransform.anchoredPosition = originalPosition;
-    }
-    
-    #endregion
-    
-    #region Actions
-    
-    public void UseItem()
-    {
-        if (item == null || !canPlayerUse) return;
+        // Verificar se foi dropado em um slot válido
+        bool wasDropped = TryDropItem(eventData);
         
-        if (item.IsConsumable)
+        if (!wasDropped)
         {
-            if (inventoryManager == null || inventoryManager.playerController == null)
+            // Voltar para posição original
+            rectTransform.position = originalPosition;
+        }
+        
+        UpdateColors();
+    }
+    
+    private bool TryDropItem(PointerEventData eventData)
+    {
+        // Verificar se foi dropado em outro slot de inventário
+        var results = new System.Collections.Generic.List<RaycastResult>();
+        EventSystem.current.RaycastAll(eventData, results);
+        
+        foreach (var result in results)
+        {
+            var otherSlot = result.gameObject.GetComponent<InventoryItemUI>();
+            if (otherSlot != null && otherSlot != this)
             {
-                Debug.LogError("InventoryItemUI: inventoryManager or playerController is null!");
-                return;
+                // Trocar itens
+                return SwapItems(otherSlot);
             }
-
-            try
+            
+            // Verificar drop em equipment slots
+            var equipSlot = result.gameObject.GetComponent<EquipmentSlotUI>();
+            if (equipSlot != null && item.IsEquipment)
             {
-                // Guardar o stack atual para verificar se o item foi consumido
-                int oldStack = item.currentStack;
-                
-                item.Use(inventoryManager.playerController);
-                PlayUseSound();
-                
-                // Verificar se o item foi consumido
-                if (item.currentStack < oldStack)
-                {
-                    // Atualizar UI
-                    RefreshUI();
-                    
-                    // Se o item acabou, destruir o GameObject
-                    if (item.currentStack <= 0)
-                    {
-                        Destroy(gameObject);
-                        return;
-                    }
-                }
-                
-                // Animação de uso
-                if (gameObject.activeInHierarchy)
-                {
-                    StartCoroutine(UseItemAnimation());
-                }
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"Error using item {item.name}: {e.Message}");
+                return TryEquipToSlot(equipSlot);
             }
         }
+        
+        return false;
     }
     
-    public void EquipItem()
+    private bool SwapItems(InventoryItemUI otherSlot)
     {
-        if (item == null || !canPlayerUse || !item.IsEquipment) return;
+        if (otherSlot == null || otherSlot.item == null) return false;
         
+        // Implementar troca de itens
+        Item tempItem = this.item;
+        this.item = otherSlot.item;
+        otherSlot.item = tempItem;
+        
+        // Atualizar displays
+        UpdateDisplay();
+        otherSlot.UpdateDisplay();
+        
+        return true;
+    }
+    
+    private bool TryEquipToSlot(EquipmentSlotUI equipSlot)
+    {
+        if (equipSlot == null || !item.IsEquipment) return false;
+        
+        // Tentar equipar
         bool success = inventoryManager.EquipItem(item);
         if (success)
         {
-            PlayEquipSound();
-            StartCoroutine(EquipAnimation());
+            UpdateDisplay();
         }
-    }
-    
-    private void ShowDestroyConfirmation()
-    {
-        if (!item.isDestroyable) return;
         
-        // Implementar diálogo de confirmação
-        Debug.Log($"Deseja destruir {item.name}?");
-        
-        // Por enquanto, destruir diretamente
-        DestroyItem();
-    }
-    
-    private void DestroyItem()
-    {
-        if (inventoryManager.RemoveItem(item))
-        {
-            StartCoroutine(DestroyAnimation());
-        }
+        return success;
     }
     
     #endregion
     
-    #region Context Menu
+    #region Tooltip
     
-    private void ShowContextMenu()
+    private void ShowTooltip()
     {
-        // Implementar context menu
-        Debug.Log($"Context menu para {item.name}");
+        if (item == null) return;
         
-        // Opções básicas:
-        // - Usar (se consumível)
-        // - Equipar (se equipamento)
-        // - Dropar
-        // - Destruir
-        // - Informações detalhadas
-    }
-    
-    #endregion
-    
-    #region Animations
-    
-    private void AnimateScale(float targetScale)
-    {
-        if (currentAnimation != null)
+        // Usar EventManager para mostrar tooltip
+        EventManager.TriggerEvent(new TooltipRequestEvent
         {
-            StopCoroutine(currentAnimation);
-        }
-        
-        currentAnimation = StartCoroutine(ScaleAnimation(targetScale));
-    }
-    
-    private IEnumerator ScaleAnimation(float targetScale)
-    {
-        Vector3 startScale = transform.localScale;
-        Vector3 endScale = originalScale * targetScale;
-        
-        float elapsed = 0f;
-        
-        while (elapsed < animationDuration)
-        {
-            elapsed += Time.deltaTime;
-            float progress = elapsed / animationDuration;
-            float curveValue = scaleCurve.Evaluate(progress);
-            
-            transform.localScale = Vector3.Lerp(startScale, endScale, curveValue);
-            yield return null;
-        }
-        
-        transform.localScale = endScale;
-        currentAnimation = null;
-    }
-    
-    private IEnumerator AnimateRarityBorder()
-    {
-        if (rarityBorder == null) yield break;
-        
-        float pulseSpeed = 2f;
-        Color originalColor = rarityBorder.color;
-        
-        while (rarityBorder.gameObject.activeInHierarchy)
-        {
-            float alpha = 0.5f + (Mathf.Sin(Time.time * pulseSpeed) * 0.3f);
-            Color pulseColor = originalColor;
-            pulseColor.a = alpha;
-            rarityBorder.color = pulseColor;
-            
-            yield return null;
-        }
-    }
-    
-    private IEnumerator UseItemAnimation()
-    {
-        if (backgroundImage == null)
-        {
-            Debug.LogWarning("InventoryItemUI: backgroundImage is null, skipping animation");
-            yield break;
-        }
-
-        // Animação de "consumir" - escala pequena e fade
-        Vector3 originalScale = transform.localScale;
-        Color originalColor = backgroundImage.color;
-        
-        float duration = 0.3f;
-        float elapsed = 0f;
-        
-        // Primeira parte da animação - diminuir
-        while (elapsed < duration)
-        {
-            if (!gameObject.activeInHierarchy) yield break;
-            
-            try
-            {
-                elapsed += Time.deltaTime;
-                float progress = elapsed / duration;
-                
-                transform.localScale = Vector3.Lerp(originalScale, originalScale * 0.8f, progress);
-                
-                Color fadeColor = originalColor;
-                fadeColor.a = Mathf.Lerp(1f, 0.5f, progress);
-                backgroundImage.color = fadeColor;
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"Error in UseItemAnimation (first part): {e.Message}");
-                RestoreOriginalState(originalScale, originalColor);
-                yield break;
-            }
-            
-            yield return null;
-        }
-        
-        // Segunda parte da animação - voltar ao normal
-        elapsed = 0f;
-        while (elapsed < duration)
-        {
-            if (!gameObject.activeInHierarchy) yield break;
-            
-            try
-            {
-                elapsed += Time.deltaTime;
-                float progress = elapsed / duration;
-                
-                transform.localScale = Vector3.Lerp(originalScale * 0.8f, originalScale, progress);
-                
-                Color fadeColor = originalColor;
-                fadeColor.a = Mathf.Lerp(0.5f, 1f, progress);
-                backgroundImage.color = fadeColor;
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"Error in UseItemAnimation (second part): {e.Message}");
-                RestoreOriginalState(originalScale, originalColor);
-                yield break;
-            }
-            
-            yield return null;
-        }
-        
-        RestoreOriginalState(originalScale, originalColor);
-    }
-    
-    private void RestoreOriginalState(Vector3 originalScale, Color originalColor)
-    {
-        try
-        {
-            transform.localScale = originalScale;
-            if (backgroundImage != null)
-            {
-                backgroundImage.color = originalColor;
-            }
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Error restoring original state: {e.Message}");
-        }
-    }
-    
-    private IEnumerator EquipAnimation()
-    {
-        // Animação de "equipar" - brilho verde
-        if (backgroundImage == null) yield break;
-        
-        Color originalColor = backgroundImage.color;
-        Color equipColor = Color.green;
-        
-        float duration = 0.5f;
-        float elapsed = 0f;
-        
-        // Fade para verde
-        while (elapsed < duration / 2)
-        {
-            elapsed += Time.deltaTime;
-            float progress = (elapsed / (duration / 2));
-            
-            backgroundImage.color = Color.Lerp(originalColor, equipColor, progress);
-            yield return null;
-        }
-        
-        // Fade de volta
-        elapsed = 0f;
-        while (elapsed < duration / 2)
-        {
-            elapsed += Time.deltaTime;
-            float progress = (elapsed / (duration / 2));
-            
-            backgroundImage.color = Color.Lerp(equipColor, originalColor, progress);
-            yield return null;
-        }
-        
-        backgroundImage.color = originalColor;
-        RefreshUI(); // Atualizar estado equipado
-    }
-    
-    private IEnumerator DestroyAnimation()
-    {
-        // Animação de destruição - desaparecer com rotação
-        float duration = 0.5f;
-        float elapsed = 0f;
-        
-        Vector3 originalScale = transform.localScale;
-        Vector3 originalRotation = transform.eulerAngles;
-        
-        while (elapsed < duration)
-        {
-            elapsed += Time.deltaTime;
-            float progress = elapsed / duration;
-            
-            transform.localScale = Vector3.Lerp(originalScale, Vector3.zero, progress);
-            transform.eulerAngles = originalRotation + new Vector3(0, 0, progress * 360f);
-            
-            canvasGroup.alpha = 1f - progress;
-            
-            yield return null;
-        }
-        
-        Destroy(gameObject);
-    }
-    
-    #endregion
-    
-    #region Audio
-    
-    private void PlayHoverSound()
-    {
-        PlaySound("UI_Hover");
-    }
-    
-    private void PlaySelectSound()
-    {
-        PlaySound("UI_Select");
-    }
-    
-    private void PlayUseSound()
-    {
-        if (!string.IsNullOrEmpty(item.useSound))
-        {
-            PlaySound(item.useSound);
-        }
-        else
-        {
-            PlaySound("Item_Use");
-        }
-    }
-    
-    private void PlayEquipSound()
-    {
-        PlaySound("Item_Equip");
-    }
-    
-    private void PlayDragSound()
-    {
-        PlaySound("UI_Drag");
-    }
-    
-    private void PlayDropSound()
-    {
-        PlaySound("UI_Drop");
-    }
-    
-    private void PlaySound(string soundName)
-    {
-        if (audioSource == null) return;
-        
-        AudioClip clip = Resources.Load<AudioClip>($"Audio/UI/{soundName}");
-        if (clip != null)
-        {
-            audioSource.PlayOneShot(clip);
-        }
-    }
-    
-    #endregion
-    
-    #region Tooltip System
-    
-    private void ShowTooltip(string content)
-    {
-        if (uiManager != null)
-        {
-            Vector3 tooltipPosition = transform.position;
-            
-            // Ajustar posição para não sair da tela
-            RectTransform canvasRect = GetComponentInParent<Canvas>().GetComponent<RectTransform>();
-            if (canvasRect != null)
-            {
-                Vector2 screenPoint = RectTransformUtility.WorldToScreenPoint(null, tooltipPosition);
-                
-                if (screenPoint.x > Screen.width * 0.7f)
-                {
-                    tooltipPosition += Vector3.left * 200f;
-                }
-                else
-                {
-                    tooltipPosition += Vector3.right * 200f;
-                }
-                
-                if (screenPoint.y < Screen.height * 0.3f)
-                {
-                    tooltipPosition += Vector3.up * 100f;
-                }
-            }
-            
-            // Usar sistema de tooltip customizado se disponível
-            EventManager.TriggerEvent(new TooltipRequestEvent
-            {
-                item = item,
-                screenPosition = tooltipPosition,
-                show = true
-            });
-        }
+            item = item,
+            screenPosition = transform.position,
+            show = true
+        });
     }
     
     private void HideTooltip()
@@ -933,132 +433,94 @@ public class InventoryItemUI : MonoBehaviour, IPointerEnterHandler, IPointerExit
     
     #region Utility Methods
     
-    private Color GetTypeColor(ItemType type)
+    private bool IsItemEquipped()
     {
-        switch (type)
+        if (inventoryManager == null || item == null) return false;
+        
+        // Verificar se o item está equipado
+        var equippedItems = inventoryManager.GetAllEquippedItems();
+        return equippedItems.Contains(item);
+    }
+    
+    private Sprite LoadItemIcon()
+    {
+        if (item == null) return null;
+        
+        // Tentar carregar ícone específico do item
+        if (!string.IsNullOrEmpty(item.iconPath))
         {
-            case ItemType.Weapon: return new Color(0.8f, 0.4f, 0.4f);
-            case ItemType.Helmet: return new Color(0.6f, 0.6f, 0.8f);
-            case ItemType.Chest: return new Color(0.7f, 0.5f, 0.3f);
-            case ItemType.Gloves: return new Color(0.5f, 0.7f, 0.5f);
-            case ItemType.Boots: return new Color(0.4f, 0.6f, 0.4f);
-            case ItemType.Consumable: return new Color(0.3f, 0.8f, 0.3f);
-            case ItemType.Material: return new Color(0.7f, 0.7f, 0.4f);
-            case ItemType.Quest: return new Color(1f, 0.8f, 0.2f);
-            case ItemType.Jewelry: return new Color(0.9f, 0.7f, 0.9f);
+            return Resources.Load<Sprite>(item.iconPath);
+        }
+        
+        // Fallback para ícone por tipo
+        string typePath = $"UI/ItemIcons/{item.type}";
+        return Resources.Load<Sprite>(typePath);
+    }
+    
+    private Color GetItemTypeColor()
+    {
+        switch (item.type)
+        {
+            case ItemType.Weapon: return Color.red;
+            case ItemType.Helmet: return new Color(0.5f, 0.3f, 0.1f); // Brown
+            case ItemType.Chest: return new Color(0.3f, 0.3f, 0.6f); // Blue
+            case ItemType.Gloves: return new Color(0.4f, 0.6f, 0.4f); // Green
+            case ItemType.Boots: return new Color(0.6f, 0.4f, 0.2f); // Orange
+            case ItemType.Jewelry: return new Color(1f, 0.8f, 0.2f); // Gold
+            case ItemType.Consumable: return new Color(0.2f, 0.8f, 0.2f); // Bright Green
+            case ItemType.Material: return new Color(0.7f, 0.7f, 0.7f); // Gray
+            case ItemType.Quest: return new Color(1f, 1f, 0.4f); // Yellow
             default: return Color.white;
         }
     }
     
-    public bool IsItemValid()
+    private void PlayClickEffect()
     {
-        return item != null && item.IsValid();
+        // Implementar efeito visual/sonoro de clique
+        StartCoroutine(ClickEffectCoroutine());
     }
     
-    public void ForceRefresh()
+    private System.Collections.IEnumerator ClickEffectCoroutine()
     {
-        if (item != null)
-        {
-            RefreshUI();
-        }
-    }
-    
-    #endregion
-    
-    #region Comparison & Highlight
-    
-    public void HighlightAsUpgrade(bool isUpgrade)
-    {
-        if (backgroundImage == null) return;
+        if (backgroundImage == null) yield break;
         
-        if (isUpgrade)
-        {
-            // Destacar em verde como upgrade
-            backgroundImage.color = Color.Lerp(normalColor, Color.green, 0.3f);
-            
-            if (glowEffect != null)
-            {
-                glowEffect.SetActive(true);
-            }
-        }
-        else
-        {
-            UpdateBackgroundColor();
-            
-            if (glowEffect != null && item.rarity < ItemRarity.Epic)
-            {
-                glowEffect.SetActive(false);
-            }
-        }
-    }
-    
-    public void HighlightAsDowngrade(bool isDowngrade)
-    {
-        if (backgroundImage == null) return;
+        Color originalColor = backgroundImage.color;
+        Color flashColor = Color.white;
         
-        if (isDowngrade)
-        {
-            // Destacar em vermelho como downgrade
-            backgroundImage.color = Color.Lerp(normalColor, Color.red, 0.3f);
-        }
-        else
-        {
-            UpdateBackgroundColor();
-        }
+        // Flash rápido
+        backgroundImage.color = flashColor;
+        yield return new WaitForSeconds(0.1f);
+        backgroundImage.color = originalColor;
     }
     
-    #endregion
-    
-    #region Interface Implementations for Drop Zones
+    public void SetSelected(bool selected)
+    {
+        isSelected = selected;
+        UpdateColors();
+    }
     
     public Item GetItem()
     {
         return item;
     }
     
-    public bool CanAcceptItem(Item otherItem)
+    public void RefreshDisplay()
     {
-        // Lógica para determinar se pode aceitar outro item (para swap)
-        return otherItem != null && otherItem != item;
-    }
-    
-    public void SwapItems(InventoryItemUI otherItemUI)
-    {
-        if (otherItemUI == null || otherItemUI.item == null) return;
-        
-        Item tempItem = this.item;
-        this.item = otherItemUI.item;
-        otherItemUI.item = tempItem;
-        
-        // Atualizar ambas as UIs
-        this.RefreshUI();
-        otherItemUI.RefreshUI();
-        
-        PlayDropSound();
+        UpdateDisplay();
     }
     
     #endregion
     
-    #region Debug
+    #region Cleanup
     
-    [ContextMenu("Debug Item Info")]
-    private void DebugItemInfo()
+    private void OnDestroy()
     {
-        if (item == null)
-        {
-            Debug.Log("Item is null");
-            return;
-        }
+        HideTooltip();
         
-        Debug.Log($"=== {item.name} ===");
-        Debug.Log($"Type: {item.type}");
-        Debug.Log($"Rarity: {item.rarity}");
-        Debug.Log($"Quality: {item.quality}");
-        Debug.Log($"Level: {item.level}");
-        Debug.Log($"Value: {item.GetCurrentValue()}");
-        Debug.Log($"Can Player Use: {canPlayerUse}");
-        Debug.Log($"Is Equipped: {isEquipped}");
-        Debug.Log($"Stack: {item.currentStack}/{item.stackSize}");
+        if (itemButton != null)
+        {
+            itemButton.onClick.RemoveAllListeners();
+        }
     }
     
     #endregion
